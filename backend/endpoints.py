@@ -23,7 +23,7 @@ async def upload_file(file: UploadFile = File(...)):
     content = await file.read()
     filename_lower = file.filename.lower()
     path = None
-    if filename_lower.endswith((".pdf", ".txt")):
+    if filename_lower.endswith((".pdf", ".txt", ".pptx")):
         path = await utils.process_document(
             filename=file.filename,
             content=content,
@@ -40,6 +40,7 @@ async def upload_file(file: UploadFile = File(...)):
         )
 
     if path:
+        print(f"File manually uploaded and moved to: {path}")
         return {"message": "File processed successfully", "path": path}
     else:
         raise HTTPException(status_code=500, detail="Failed to process the file.")

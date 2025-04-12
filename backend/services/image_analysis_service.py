@@ -12,8 +12,13 @@ try:
     pretrained = "laion400m_e32"  # Well-balanced pretraining dataset
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Enable QuickGELU activation to match the pretrained weights
     model, _, preprocess = open_clip.create_model_and_transforms(
-        model_name, pretrained=pretrained, device=device
+        model_name,
+        pretrained=pretrained,
+        device=device,
+        jit=False,
+        force_quick_gelu=True,  # Enable QuickGELU to match pretrained weights
     )
 
     # Common categories for image classification
@@ -87,6 +92,7 @@ try:
         "design",
         "logo",
         "icon",
+        "presentation",
     ]
 
     # More detailed descriptive prompts for richer image description
@@ -550,6 +556,7 @@ def get_suggested_path_from_analysis(analysis, filename):
             "Design": "Design",
             "Logo": "Design/Logos",
             "Icon": "Design/Icons",
+            "Presentation": "Presentations",
         }
 
         # Get mapped category or use the original
@@ -643,6 +650,7 @@ def get_suggested_path_from_analysis(analysis, filename):
         "Design": "Design",
         "Logo": "Design/Logos",
         "Icon": "Design/Icons",
+        "Presentation": "Presentations",
     }
 
     # Get mapped category or use the original

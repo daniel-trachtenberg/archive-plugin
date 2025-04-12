@@ -11,6 +11,8 @@ import logging
 from datetime import datetime
 import threading
 import requests
+import contextlib
+from contextlib import asynccontextmanager
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +24,36 @@ logging.basicConfig(
     ],
 )
 
-app = FastAPI(title=settings.APP_TITLE)
+
+# Create a context manager for lifespan events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events"""
+    try:
+        # Create a background thread to run the event loop for handling file events
+        event_handler = InputDirectoryHandler()
+        observer = Observer()
+        observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=False)
+
+        # Start file watching thread
+        threading.Thread(
+            target=_run_observer_with_event_loop,
+            args=(observer, event_handler.loop),
+            daemon=True,
+        ).start()
+
+        logging.info(f"File watcher started for input directory: {settings.INPUT_DIR}")
+        logging.info(f"Files will be organized and stored in: {settings.ARCHIVE_DIR}")
+    except Exception as e:
+        logging.error(f"Failed to start file watcher: {str(e)}")
+
+    yield  # This is where the app runs
+
+    # Shutdown logic if needed
+
+
+# Update the FastAPI instance to use the lifespan
+app = FastAPI(title=settings.APP_TITLE, lifespan=lifespan)
 
 # CORS middleware setup
 app.add_middleware(
@@ -92,7 +123,7 @@ class InputDirectoryHandler(FileSystemEventHandler):
                 content = f.read()
 
             # Process based on file type
-            if filename.lower().endswith((".pdf", ".txt")):
+            if filename.lower().endswith((".pdf", ".txt", ".pptx")):
                 asyncio.run_coroutine_threadsafe(
                     utils.process_document(filename=filename, content=content),
                     self.loop,
@@ -113,28 +144,6 @@ class InputDirectoryHandler(FileSystemEventHandler):
         finally:
             if file_path in self.processing_files:
                 self.processing_files.remove(file_path)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start the file watcher on application startup"""
-    try:
-        # Create a background thread to run the event loop for handling file events
-        event_handler = InputDirectoryHandler()
-        observer = Observer()
-        observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=False)
-
-        # Start file watching thread
-        threading.Thread(
-            target=_run_observer_with_event_loop,
-            args=(observer, event_handler.loop),
-            daemon=True,
-        ).start()
-
-        logging.info(f"File watcher started for input directory: {settings.INPUT_DIR}")
-        logging.info(f"Files will be organized and stored in: {settings.ARCHIVE_DIR}")
-    except Exception as e:
-        logging.error(f"Failed to start file watcher: {str(e)}")
 
 
 def _run_observer_with_event_loop(observer, loop):

@@ -19,13 +19,20 @@ class LLMService:
     - The content or subject matter of the file
     - The existing directory structure and how to best fit the file within it
     - Creating new directories if they would help better organize the file
+    - Dont create deep file paths, keep it simple and respectivly shallow
 
     Only suggest the directory path.
 
     Input variables:
-    File name: {{name}}
-    File content or description: {{content}}
-    Current directory structure: {{directory}}
+    <file-name>
+    {{name}}
+    </file-name>
+    <content>
+    {{content}}
+    </content>
+    <directory>
+    {{directory}}
+    </directory>
     """
 
     @staticmethod
@@ -36,6 +43,63 @@ class LLMService:
         Fetches a path suggestion from Ollama based on the input filename, file content, and current directory structure.
         """
         try:
+            # Handle large content by extracting most important parts (up to 5000 chars)
+            processed_content = content
+            content_limit = 5000
+
+            # Check if we need to truncate and summarize
+            if len(content) > content_limit:
+                # For pptx files, prioritize slide titles and first few lines of each slide
+                if name.lower().endswith(".pptx"):
+                    slides = content.split("\n\n")
+                    summary_slides = []
+                    remaining_chars = content_limit
+
+                    # Always include the first slide (usually has title/overview)
+                    if slides and remaining_chars > 0:
+                        first_slide = slides[0][
+                            : min(len(slides[0]), 500)
+                        ]  # First 500 chars of first slide
+                        summary_slides.append(first_slide)
+                        remaining_chars -= len(first_slide)
+
+                    # Extract title and first line from each slide until we reach the limit
+                    for slide in slides[1:]:
+                        if remaining_chars <= 0:
+                            break
+
+                        slide_lines = slide.split("\n")
+                        slide_title = slide_lines[0] if slide_lines else ""
+
+                        # Get title and first content line if available
+                        slide_extract = slide_title
+                        if len(slide_lines) > 1:
+                            # Add first content line if it's not empty
+                            first_content = next(
+                                (line for line in slide_lines[1:] if line.strip()), ""
+                            )
+                            if first_content:
+                                slide_extract += "\n" + first_content
+
+                        # Add if we have space
+                        if len(slide_extract) < remaining_chars:
+                            summary_slides.append(slide_extract)
+                            remaining_chars -= len(slide_extract)
+                        else:
+                            # Add truncated version with as much as will fit
+                            summary_slides.append(slide_extract[:remaining_chars])
+                            remaining_chars = 0
+                            break
+
+                    processed_content = "\n\n".join(summary_slides)
+                else:
+                    # For other file types, just take beginning and end with a note in between
+                    start_content = content[: content_limit // 2]
+                    end_content = content[-content_limit // 2 :]
+                    processed_content = (
+                        f"{start_content}\n...[content truncated]...\n{end_content}"
+                    )
+
             prompt = f"""
             {LLMService.SYSTEM_PROMPT}
             
@@ -43,7 +107,7 @@ class LLMService:
             {name}
             </n>
             <content>
-            {content[:5000]}  # Limit content size
+            {processed_content}
             </content>
             <directory>
             {directory_structure}
