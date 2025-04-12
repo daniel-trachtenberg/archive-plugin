@@ -473,3 +473,280 @@ async def get_path_suggestion_for_image(
     except Exception as e:
         logging.error(f"Error getting path suggestion for image: {str(e)}")
         return "Photos/General"
+
+
+async def get_path_suggestion_for_folder(
+    folder_name: str,
+    folder_content: str,
+    directory_structure: str,
+) -> str:
+    """
+    Get a path suggestion for a folder using the configured LLM service (Ollama).
+    Uses a specialized prompt for folder organization.
+    """
+    try:
+        FOLDER_SYSTEM_PROMPT = """
+        You are an AI assistant specializing in knowledge management and folder organization. Your job is to intelligently categorize folders based on their content and name, placing them into a meaningful directory structure.
+
+        IMPORTANT: Your task is to analyze a folder's name and contents, then suggest the best directory path for it in the Archive. Think carefully about the most meaningful category for this folder based on its content.
+
+        For example:
+        - A folder named "Vacation Photos" containing image files from Hawaii should go in "Travel/Hawaii" or "Photos/Vacations/Hawaii"
+        - A folder named "Financials 2023" with spreadsheets should go in "Finance/2023" or "Documents/Financial/2023"
+        - A folder named "Project X" with code files should go in "Projects/Development" or "Work/Programming/ProjectX"
+
+        To make your suggestion, output the directory path starting with <suggestedpath>, for example:
+        <suggestedpath>Work/Projects/Research</suggestedpath>
+
+        Rules:
+        1. ANALYZE both the folder name AND its contents carefully to determine the best category
+        2. DO NOT simply repeat the folder name or put it in a generic "Folders" directory
+        3. Place the folder in a MEANINGFUL CATEGORY based on what it contains
+        4. Create logical category hierarchies (up to 2-3 levels deep) that reflect real-world organization
+        5. The folder name itself will be added automatically, so DO NOT include it in your path
+        6. NEVER suggest just "Archive" or a top-level directory only
+        7. If the folder contains mixed content, categorize it based on the predominant theme
+
+        Input variables:
+        <folder-name>
+        {{name}}
+        </folder-name>
+        <content>
+        {{content}}
+        </content>
+        <directory>
+        {{directory}}
+        </directory>
+        """
+
+        # Pre-process the folder content to highlight key information
+        processed_content = folder_content
+        if folder_content and len(folder_content) > 50:
+            # Add an analysis hint if we have sufficient content
+            processed_content += "\n\nPlease analyze both the folder name and its contents to determine the most appropriate category."
+
+        # Generate the prompt with the enhanced content
+        prompt = f"""
+        {FOLDER_SYSTEM_PROMPT}
+        
+        <folder-name>
+        {folder_name}
+        </folder-name>
+        <content>
+        {processed_content}
+        </content>
+        <directory>
+        {directory_structure}
+        </directory>
+        
+        Remember to suggest a MEANINGFUL CATEGORY PATH, not just repeat the folder name or use a generic location.
+        """
+
+        response = requests.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": settings.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.2,  # Slight increase in creativity for better categorization
+                },
+            },
+            timeout=60,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            match = re.search(
+                r"<suggestedpath>(.*?)</suggestedpath>",
+                result.get("response", ""),
+            )
+            suggested_path = match.group(1) if match else ""
+
+            logging.info(
+                f"Raw LLM suggestion for folder '{folder_name}': {suggested_path}"
+            )
+
+            # Check if the suggestion is meaningful
+            if (
+                not suggested_path
+                or suggested_path == "Uncategorized"
+                or suggested_path == "Archive"
+                or suggested_path == "/"
+                or suggested_path == "General"
+                or suggested_path == "Folders"
+                or suggested_path == "Folders/General"
+            ):
+
+                logging.warning(
+                    f"LLM provided generic path '{suggested_path}' for folder '{folder_name}', attempting to improve"
+                )
+
+                # Try to extract meaningful categories from the folder_name
+                folder_keywords = (
+                    folder_name.replace("_", " ").replace("-", " ").lower().split()
+                )
+
+                # Map common keywords to categories
+                keyword_to_category = {
+                    "photo": "Photos",
+                    "photos": "Photos",
+                    "image": "Photos",
+                    "images": "Photos",
+                    "picture": "Photos",
+                    "pictures": "Photos",
+                    "doc": "Documents",
+                    "docs": "Documents",
+                    "document": "Documents",
+                    "documents": "Documents",
+                    "finance": "Finance",
+                    "financial": "Finance",
+                    "bank": "Finance",
+                    "tax": "Finance/Taxes",
+                    "taxes": "Finance/Taxes",
+                    "receipt": "Finance/Receipts",
+                    "receipts": "Finance/Receipts",
+                    "invoice": "Finance/Invoices",
+                    "invoices": "Finance/Invoices",
+                    "project": "Projects",
+                    "projects": "Projects",
+                    "work": "Work",
+                    "personal": "Personal",
+                    "travel": "Travel",
+                    "vacation": "Travel/Vacations",
+                    "trip": "Travel",
+                    "school": "Education",
+                    "college": "Education",
+                    "university": "Education",
+                    "course": "Education/Courses",
+                    "class": "Education/Courses",
+                    "code": "Development",
+                    "programming": "Development",
+                    "software": "Development",
+                    "app": "Development/Apps",
+                    "recipe": "Recipes",
+                    "recipes": "Recipes",
+                    "food": "Food",
+                    "health": "Health",
+                    "medical": "Health/Medical",
+                    "fitness": "Health/Fitness",
+                    "workout": "Health/Fitness",
+                    "book": "Books",
+                    "books": "Books",
+                    "music": "Music",
+                    "song": "Music",
+                    "video": "Videos",
+                    "movie": "Videos/Movies",
+                    "movies": "Videos/Movies",
+                    "show": "Videos/TV",
+                    "tv": "Videos/TV",
+                    "series": "Videos/TV",
+                    "home": "Home",
+                    "house": "Home",
+                    "apartment": "Home",
+                    "furniture": "Home/Furniture",
+                    "decoration": "Home/Decoration",
+                    "garden": "Home/Garden",
+                    "car": "Vehicles/Cars",
+                    "vehicle": "Vehicles",
+                    "art": "Art",
+                    "design": "Design",
+                    "presentation": "Presentations",
+                    "slideshow": "Presentations",
+                    "slide": "Presentations",
+                    "meeting": "Work/Meetings",
+                    "report": "Work/Reports",
+                    "family": "Personal/Family",
+                    "kid": "Personal/Family",
+                    "children": "Personal/Family",
+                    "event": "Events",
+                }
+
+                # Check if any keywords match categories
+                for keyword in folder_keywords:
+                    if keyword in keyword_to_category:
+                        suggested_path = keyword_to_category[keyword]
+                        logging.info(
+                            f"Improved path based on keyword '{keyword}': {suggested_path}"
+                        )
+                        break
+
+                # If still no good suggestion, analyze content for common file types
+                if not suggested_path or suggested_path in [
+                    "Uncategorized",
+                    "Archive",
+                    "/",
+                    "General",
+                    "Folders",
+                    "Folders/General",
+                ]:
+                    # Look for file extensions in the content
+                    if "pdf" in folder_content.lower():
+                        suggested_path = "Documents"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".jpg", ".jpeg", ".png", ".gif"]
+                    ):
+                        suggested_path = "Photos"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".doc", ".docx", ".txt"]
+                    ):
+                        suggested_path = "Documents"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".xls", ".xlsx", ".csv"]
+                    ):
+                        suggested_path = "Data"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".mp3", ".wav", ".flac"]
+                    ):
+                        suggested_path = "Music"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".mp4", ".mov", ".avi"]
+                    ):
+                        suggested_path = "Videos"
+                    elif any(
+                        ext in folder_content.lower()
+                        for ext in [".py", ".js", ".java", ".html", ".css"]
+                    ):
+                        suggested_path = "Development"
+                    else:
+                        # Last resort - use capitalized folder name as category
+                        suggested_path = (
+                            folder_name.replace("_", " ").replace("-", " ").title()
+                        )
+
+                logging.info(
+                    f"Final fallback path for folder '{folder_name}': {suggested_path}"
+                )
+
+            # Ensure the path doesn't end with the folder name (we'll add that later)
+            if suggested_path.endswith(folder_name):
+                suggested_path = suggested_path[: -len(folder_name)].rstrip("/")
+
+            # Ensure the path doesn't end with a file extension
+            if "." in suggested_path.split("/")[-1]:
+                suggested_path = os.path.dirname(suggested_path)
+
+            # Remove trailing slashes
+            suggested_path = suggested_path.rstrip("/")
+
+            # Make sure we're not returning an empty path
+            if not suggested_path:
+                suggested_path = "Documents"
+
+            logging.info(
+                f"Final processed path for folder '{folder_name}': {suggested_path}"
+            )
+            return suggested_path
+        else:
+            logging.error(
+                f"Failed to get folder suggestion from Ollama: {response.text}"
+            )
+            return "Documents"
+    except Exception as e:
+        logging.error(f"Error getting path suggestion for folder: {str(e)}")
+        return "Documents"
