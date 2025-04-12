@@ -11,15 +11,20 @@ class LLMService:
     SYSTEM_PROMPT = """
     You are an AI assistant that helps organize files into a directory structure based on the file's content. You will be given the name of a file, its content or description, and the current directory structure. Your task is to analyze the file and suggest the most appropriate directory path to place it within the existing structure. If needed, you may suggest creating new directories to better categorize the file, while ensuring that the naming of any new directories is consistent with the naming of the current directory structure.
 
+    IMPORTANT: For PDF files and documents, prioritize analyzing the CONTENT over the filename. Read and comprehend the actual content carefully to determine meaningful categories based on the subject matter, topics, and themes discussed in the document.
+
     To make your suggestion, simply output the directory path starting with <suggestedpath>, for example:
     <suggestedpath>Work/Project_x/Research/</suggestedpath>
 
     Remember to consider the following when making your suggestion:
-    - The file type (e.g., .txt, .jpg, .pdf)
-    - The content or subject matter of the file
-    - The existing directory structure and how to best fit the file within it
-    - Creating new directories if they would help better organize the file
-    - Dont create deep file paths, keep it simple and respectivly shallow
+    1. CONTENT FIRST: The actual content and subject matter of the file is the PRIMARY factor for categorization
+    2. ANALYZE THE TEXT: For documents like PDFs, thoroughly analyze the text content to understand the topics
+    3. The file type (e.g., .txt, .jpg, .pdf) 
+    4. The existing directory structure and how to best fit the file within it
+    5. Creating new directories if they would help better organize the file
+    6. Don't create deep file paths, keep it simple and relatively shallow
+    7. File name should be a secondary factor after content analysis
+    8. For PDFs with random filenames, focus entirely on the document content
 
     Only suggest the directory path.
 
@@ -47,10 +52,119 @@ class LLMService:
             processed_content = content
             content_limit = 5000
 
+            # Special handling for PDFs to prioritize content analysis
+            is_pdf = name.lower().endswith(".pdf")
+
             # Check if we need to truncate and summarize
             if len(content) > content_limit:
+                # PDF-specific processing to extract more meaningful context
+                if is_pdf:
+                    # For PDFs, try to extract key sections by looking for headers and important content
+                    # First, get the first 500 chars which often has the title/abstract
+                    intro_content = content[:500]
+
+                    # Look for potential headers or section markers in the document
+                    potential_sections = re.findall(
+                        r"(?:^|\n)(?:[A-Z][A-Za-z\s]{2,50}:?|[0-9]+\.\s+[A-Z][A-Za-z\s]{2,50})(?:\n|$)",
+                        content,
+                    )
+
+                    # If we found section headers, try to extract content from important sections
+                    if potential_sections and len(potential_sections) > 2:
+                        main_sections = []
+                        chars_remaining = content_limit - len(intro_content)
+
+                        # Try to extract content from sections that seem most relevant
+                        important_section_keywords = [
+                            "introduction",
+                            "abstract",
+                            "summary",
+                            "conclusion",
+                            "results",
+                            "findings",
+                            "discussion",
+                        ]
+
+                        # Find important sections
+                        for section in potential_sections[
+                            :10
+                        ]:  # Check first 10 potential sections
+                            section_title = section.strip().lower()
+                            section_start = content.find(section)
+
+                            if section_start > 0 and any(
+                                keyword in section_title
+                                for keyword in important_section_keywords
+                            ):
+                                # Find the next section or take 300 chars
+                                next_section_start = (
+                                    content.find(
+                                        potential_sections[
+                                            potential_sections.index(section) + 1
+                                        ]
+                                    )
+                                    if potential_sections.index(section)
+                                    < len(potential_sections) - 1
+                                    else -1
+                                )
+
+                                if next_section_start > 0:
+                                    section_content = content[
+                                        section_start : min(
+                                            section_start + 300, next_section_start
+                                        )
+                                    ]
+                                else:
+                                    section_content = content[
+                                        section_start : section_start + 300
+                                    ]
+
+                                if chars_remaining > len(section_content):
+                                    main_sections.append(section_content)
+                                    chars_remaining -= len(section_content)
+                                else:
+                                    main_sections.append(
+                                        section_content[:chars_remaining]
+                                    )
+                                    chars_remaining = 0
+                                    break
+
+                        # If we extracted meaningful sections
+                        if main_sections:
+                            processed_content = (
+                                intro_content + "\n\n" + "\n\n".join(main_sections)
+                            )
+                        else:
+                            # If no meaningful sections found, just sample throughout the document
+                            chunks = []
+                            total_chunks = (
+                                6  # Take samples from 6 different parts of the document
+                            )
+                            chunk_size = content_limit // total_chunks
+
+                            for i in range(total_chunks):
+                                start_pos = i * (len(content) // total_chunks)
+                                chunks.append(
+                                    content[start_pos : start_pos + chunk_size]
+                                )
+
+                            processed_content = "\n...\n".join(chunks)
+                    else:
+                        # If no clear sections, take samples from throughout the document
+                        chunks = []
+                        total_chunks = (
+                            6  # Take samples from 6 different parts of the document
+                        )
+                        chunk_size = content_limit // total_chunks
+
+                        for i in range(total_chunks):
+                            start_pos = i * (len(content) // total_chunks)
+                            chunks.append(content[start_pos : start_pos + chunk_size])
+
+                        processed_content = "\n...\n".join(chunks)
                 # For pptx files, prioritize slide titles and first few lines of each slide
-                if name.lower().endswith(".pptx"):
+                elif name.lower().endswith(".pptx"):
+                    # Existing PPTX handling
                     slides = content.split("\n\n")
                     summary_slides = []
                     remaining_chars = content_limit
@@ -100,6 +214,11 @@ class LLMService:
                         f"{start_content}\n...[content truncated]...\n{end_content}"
                     )
 
+            # Add an instruction for PDFs to emphasize content analysis
+            content_hint = ""
+            if is_pdf:
+                content_hint = "\nIMPORTANT: This is a PDF document. Please analyze its CONTENT carefully to categorize it, rather than relying on the filename."
+
             prompt = f"""
             {LLMService.SYSTEM_PROMPT}
             
@@ -107,7 +226,7 @@ class LLMService:
             {name}
             </n>
             <content>
-            {processed_content}
+            {processed_content}{content_hint}
             </content>
             <directory>
             {directory_structure}
@@ -135,8 +254,67 @@ class LLMService:
                 )
                 suggested_path = match.group(1) if match else ""
 
-                # If empty or default to "Uncategorized", extract topic from content
-                if not suggested_path or suggested_path == "Uncategorized":
+                # For PDFs, avoid using filename-based categorization entirely if we have content
+                if (
+                    is_pdf
+                    and content
+                    and (not suggested_path or suggested_path == "Uncategorized")
+                ):
+                    # Try one more attempt with temperature 0.2 for more creative categorization
+                    response = requests.post(
+                        f"{settings.OLLAMA_BASE_URL}/api/generate",
+                        json={
+                            "model": settings.OLLAMA_MODEL,
+                            "prompt": prompt
+                            + "\n\nPlease analyze the content carefully and suggest a more specific category based on the document's subject matter.",
+                            "stream": False,
+                            "options": {
+                                "temperature": 0.2,  # Slightly higher temperature for more creative categorization
+                            },
+                        },
+                        timeout=60,
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        match = re.search(
+                            r"<suggestedpath>(.*?)</suggestedpath>",
+                            result.get("response", ""),
+                        )
+                        second_attempt = match.group(1) if match else ""
+                        if second_attempt and second_attempt != "Uncategorized":
+                            suggested_path = second_attempt
+
+                    # If we still don't have a good category, use document content type
+                    if not suggested_path or suggested_path == "Uncategorized":
+                        # For PDFs, categorize by document type if possible
+                        document_type_patterns = {
+                            r"invoice|receipt|bill|payment": "Finance/Invoices",
+                            r"tax|taxes|irs|1099|w-2": "Finance/Taxes",
+                            r"report|analysis|research": "Documents/Reports",
+                            r"contract|agreement|legal": "Documents/Legal",
+                            r"manual|guide|instructions": "Documents/Manuals",
+                            r"certificate|diploma|degree": "Documents/Certificates",
+                            r"letter|correspondence": "Documents/Correspondence",
+                            r"article|journal|publication": "Documents/Articles",
+                            r"resume|cv|curriculum": "Documents/Resumes",
+                            r"meeting|minutes|agenda": "Documents/Meetings",
+                            r"proposal|plan|strategy": "Documents/Proposals",
+                        }
+
+                        # Check content against patterns
+                        for pattern, category in document_type_patterns.items():
+                            if re.search(pattern, content.lower()):
+                                suggested_path = category
+                                break
+
+                        # If still no match, use "Documents" as default for PDFs
+                        if not suggested_path or suggested_path == "Uncategorized":
+                            suggested_path = "Documents/General"
+                # If empty or default to "Uncategorized" for non-PDFs, extract topic from content
+                elif not is_pdf and (
+                    not suggested_path or suggested_path == "Uncategorized"
+                ):
                     # Extract topic from filename if available
                     filename_without_ext = os.path.splitext(name)[0]
                     topic = (
@@ -203,6 +381,10 @@ class LLMService:
                 return suggested_path
             else:
                 logging.error(f"Failed to get suggestion from Ollama: {response.text}")
+                # For PDFs, use document categories rather than filename
+                if is_pdf:
+                    return "Documents/General"
+
                 # Extract topic from filename if available
                 filename_without_ext = os.path.splitext(name)[0]
                 topic = filename_without_ext.replace("_", " ").replace("-", " ").title()
@@ -217,6 +399,8 @@ class LLMService:
                 return "General"
         except Exception as e:
             logging.error(f"Failed to get suggestion from Ollama: {str(e)}")
+            if name.lower().endswith(".pdf"):
+                return "Documents/General"
             return "General"
 
     @staticmethod
