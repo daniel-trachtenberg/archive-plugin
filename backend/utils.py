@@ -82,6 +82,8 @@ async def process_image(
 
         directory_structure = filesystem.get_directory_structure()
 
+        # No need to encode the image for CLIP analysis - we'll use binary content directly
+        # The encoded version is still needed for some other potential uses
         encoded_image = base64.b64encode(content).decode("utf-8")
 
         file_extension = filename.split(".")[-1].lower()
@@ -94,9 +96,11 @@ async def process_image(
         else:
             media_type = "application/octet-stream"
 
+        # Send raw content for CLIP analysis instead of relying only on filename
+        # The llm_service will use the image content for CLIP analysis directly
         suggested_path = await llm.get_path_suggestion_for_image(
             filename=filename,
-            encoded_image=encoded_image,
+            encoded_image=encoded_image,  # This will be decoded in the service
             directory_structure=directory_structure,
             media_type=media_type,
         )
@@ -113,7 +117,7 @@ async def process_image(
             if i == 0 or path_parts[i] != path_parts[i - 1]
         ]
 
-        logging.info(f"Suggested path: {suggested_path}")
+        logging.info(f"Suggested path (with CLIP analysis): {suggested_path}")
 
         final_path = "/".join(corrected_path_parts)
         final_path = os.path.normpath(final_path)
