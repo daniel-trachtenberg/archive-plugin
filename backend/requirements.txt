@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+PyPDF2
+python-multipart
+Pillow
+chromadb
+open_clip_torch
+watchdog
+httpx
