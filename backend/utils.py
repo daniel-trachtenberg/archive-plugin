@@ -12,6 +12,7 @@ import shutil
 from config import settings
 from datetime import datetime
 import docx
+import pandas as pd
 
 
 def extract_text_from_pdf(file_content):
@@ -143,6 +144,181 @@ def extract_text_from_docx(file_content):
         return ""
 
 
+def extract_text_from_excel(file_content):
+    """
+    Extract text from Excel .xls/.xlsx files.
+    """
+    try:
+        excel_file = io.BytesIO(file_content)
+
+        # Try different engines if needed
+        engines_to_try = ["openpyxl", "xlrd"]
+        workbook = None
+        sheet_names = []
+        error_messages = []
+
+        for engine in engines_to_try:
+            try:
+                # Try to read with specific engine
+                logging.info(f"Trying to read Excel file with engine: {engine}")
+                workbook = pd.ExcelFile(excel_file, engine=engine)
+                sheet_names = workbook.sheet_names
+                logging.info(
+                    f"Successfully read Excel file with {engine}, found {len(sheet_names)} sheets"
+                )
+                break
+            except Exception as e:
+                error_messages.append(f"Engine {engine} failed: {str(e)}")
+                excel_file.seek(0)  # Reset file pointer for next attempt
+
+        full_text = []
+
+        # If we couldn't open with pandas, try a last resort approach with raw file analysis
+        if not workbook:
+            error_details = "\n".join(error_messages)
+            logging.error(
+                f"Could not read Excel file with any engine. Errors:\n{error_details}"
+            )
+
+            # Try to get basic information about the file
+            try:
+                # Check if it's actually an Excel file by checking file signatures
+                excel_file.seek(0)
+                header = excel_file.read(8).hex()
+
+                # Check for Excel file signatures
+                if header.startswith("504b34"):  # PKZip signature (xlsx)
+                    file_type = "Excel XLSX (Office Open XML)"
+                elif header.startswith("d0cf11e0"):  # Compound File Binary Format (xls)
+                    file_type = "Excel XLS (Binary)"
+                else:
+                    file_type = "Unknown (not a standard Excel format)"
+
+                # Get file size
+                excel_file.seek(0, 2)  # Seek to end
+                file_size = excel_file.tell()
+
+                full_text = [
+                    "Excel file detected but could not be fully read.",
+                    f"File type: {file_type}",
+                    f"File size: {file_size/1024:.1f} KB",
+                    "This file may be password-protected, corrupted, or use an unsupported Excel format.",
+                ]
+
+                result = "\n".join(full_text)
+                return result
+            except Exception as ex:
+                return f"Could not read Excel file. Please ensure it's a valid Excel document. Error: {str(ex)}"
+
+        # Add workbook metadata if available
+        try:
+            # Different Excel engines store properties differently
+            if hasattr(workbook, "book") and hasattr(workbook.book, "properties"):
+                props = workbook.book.properties
+                if hasattr(props, "title") and props.title:
+                    full_text.append(f"Title: {props.title}")
+                if hasattr(props, "subject") and props.subject:
+                    full_text.append(f"Subject: {props.subject}")
+                if hasattr(props, "author") and props.author:
+                    full_text.append(f"Author: {props.author}")
+        except Exception as e:
+            logging.warning(f"Could not extract workbook metadata: {str(e)}")
+
+        # Add sheet names overview
+        if sheet_names:
+            full_text.append(
+                f"Workbook contains {len(sheet_names)} sheets: {', '.join(sheet_names)}"
+            )
+
+        # Process each sheet
+        sheets_processed = 0
+        sheets_failed = 0
+
+        for sheet_name in sheet_names:
+            try:
+                sheet_text = [f"Sheet: {sheet_name}"]
+
+                # Read the sheet into a dataframe with the same engine
+                excel_file.seek(0)
+                df = pd.read_excel(
+                    excel_file, sheet_name=sheet_name, engine=workbook.engine
+                )
+
+                # Skip completely empty sheets
+                if df.empty:
+                    sheet_text.append("(Empty sheet)")
+                    full_text.append("\n".join(sheet_text))
+                    sheets_processed += 1
+                    continue
+
+                # Get basic info about the sheet
+                rows, cols = df.shape
+                sheet_text.append(f"Dimensions: {rows} rows × {cols} columns")
+
+                # Get column names
+                if not df.columns.empty:
+                    sheet_text.append(f"Columns: {', '.join(df.columns.astype(str))}")
+
+                # Sample data - first 10 rows
+                max_rows = min(10, rows)
+                if max_rows > 0:
+                    sheet_text.append("Data sample:")
+                    rows_added = 0
+                    for i in range(max_rows):
+                        try:
+                            row_values = df.iloc[i].astype(str)
+                            # Filter out rows that just contain NaN values
+                            if not all(val == "nan" for val in row_values):
+                                row_text = " | ".join(row_values)
+                                # Limit row text length
+                                if len(row_text) > 500:
+                                    row_text = row_text[:500] + "..."
+                                sheet_text.append(row_text)
+                                rows_added += 1
+                        except Exception as row_e:
+                            sheet_text.append(f"(Error reading row {i}: {str(row_e)})")
+
+                    if rows_added == 0:
+                        sheet_text.append("(No meaningful data rows found)")
+
+                # Add sheet content to full text
+                full_text.append("\n".join(sheet_text))
+                sheets_processed += 1
+            except Exception as sheet_e:
+                logging.warning(
+                    f"Error processing sheet '{sheet_name}': {str(sheet_e)}"
+                )
+                full_text.append(
+                    f"Sheet: {sheet_name}\n(Error reading sheet: {str(sheet_e)})"
+                )
+                sheets_failed += 1
+
+        # Add summary of processing
+        full_text.append(
+            f"\nProcessing summary: {sheets_processed} sheets processed successfully, {sheets_failed} sheets failed."
+        )
+
+        result = "\n\n".join(full_text)
+        logging.info(
+            f"Excel file extraction complete: {len(result)} characters extracted"
+        )
+
+        # Log a preview of the extracted text
+        if result:
+            logging.debug(f"Content preview: {result[:200]}...")
+        else:
+            logging.warning("No content extracted from Excel file")
+            result = "Empty Excel workbook"
+
+        return result
+    except Exception as e:
+        logging.error(f"Failed to extract text from Excel file: {str(e)}")
+        import traceback
+
+        logging.error(traceback.format_exc())
+        return "Error extracting Excel content. Please check the file format."
+
+
 def limit_text_for_llm(text, max_chars=8192):
     """
     Limit text size to prevent exceeding LLM context window.
@@ -205,6 +381,21 @@ async def process_document(
                 basename = os.path.splitext(os.path.basename(filename))[0]
                 processed_name = basename.replace("_", " ").replace("-", " ")
                 file_content = f"Word document titled: {processed_name}"
+        elif filename.lower().endswith((".xlsx", ".xls")):
+            file_content = extract_text_from_excel(content)
+            logging.info(
+                f"Extracted Excel file content length: {len(file_content)} characters"
+            )
+
+            # Special handling for Excel files with little or no extractable text
+            if not file_content or len(file_content) < 50:
+                logging.warning(
+                    f"Excel file {filename} has little or no extractable text"
+                )
+                # Use filename as a fallback for content
+                basename = os.path.splitext(os.path.basename(filename))[0]
+                processed_name = basename.replace("_", " ").replace("-", " ")
+                file_content = f"Excel spreadsheet titled: {processed_name}"
         else:
             file_content = content.decode("utf-8")
 

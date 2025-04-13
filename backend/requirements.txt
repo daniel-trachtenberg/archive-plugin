@@ -9,3 +9,6 @@ chromadb
 open_clip_torch
 watchdog
 httpx
+pandas
+xlrd
+openpyxl

@@ -266,7 +266,9 @@ class InputDirectoryHandler(FileSystemEventHandler):
                 return
 
             # Process based on file type
-            if filename.lower().endswith((".pdf", ".txt", ".pptx", ".docx", ".doc")):
+            if filename.lower().endswith(
+                (".pdf", ".txt", ".pptx", ".docx", ".doc", ".xlsx", ".xls")
+            ):
                 asyncio.run_coroutine_threadsafe(
                     utils.process_document(filename=filename, content=content),
                     self.loop,
