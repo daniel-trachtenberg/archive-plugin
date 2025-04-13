@@ -9,35 +9,22 @@ from services import image_analysis_service
 
 class LLMService:
     SYSTEM_PROMPT = """
-    You are an AI assistant that helps organize files into a directory structure based on the file's content. You will be given the name of a file, its content or description, and the current directory structure. Your task is to analyze the file and suggest the most appropriate directory path to place it within the existing structure. If needed, you may suggest creating new directories to better categorize the file, while ensuring that the naming of any new directories is consistent with the naming of the current directory structure.
-
-    IMPORTANT: For PDF files and documents, prioritize analyzing the CONTENT over the filename. Read and comprehend the actual content carefully to determine meaningful categories based on the subject matter, topics, and themes discussed in the document.
-
-    To make your suggestion, simply output the directory path starting with <suggestedpath>, for example:
-    <suggestedpath>Work/Project_x/Research/</suggestedpath>
-
-    Remember to consider the following when making your suggestion:
-    1. CONTENT FIRST: The actual content and subject matter of the file is the PRIMARY factor for categorization
-    2. ANALYZE THE TEXT: For documents like PDFs, thoroughly analyze the text content to understand the topics
-    3. The file type (e.g., .txt, .jpg, .pdf) 
-    4. The existing directory structure and how to best fit the file within it
-    5. Creating new directories if they would help better organize the file
-    6. Don't create deep file paths, keep it simple and relatively shallow
-    7. File name should be a secondary factor after content analysis
-    8. For PDFs with random filenames, focus entirely on the document content
-
-    Only suggest the directory path.
-
+    YOU MUST ONLY RESPOND WITH A PATH. NO OTHER TEXT.
+    
+    Format your response EXACTLY like this:
+    <suggestedpath>path/goes/here</suggestedpath>
+    
+    Given a file and its content, suggest where to put it in a directory structure.
+    Consider:
+    - Content is most important for categorization
+    - File type (e.g., .txt, .jpg, .pdf)
+    - Existing directories
+    
+    DO NOT SAY ANYTHING ELSE. DO NOT EXPLAIN. ONLY PROVIDE THE PATH IN THE FORMAT SHOWN.
+    
+    <suggestedpath>path/goes/here</suggestedpath>
+    
     Input variables:
-    <file-name>
-    {{name}}
-    </file-name>
-    <content>
-    {{content}}
-    </content>
-    <directory>
-    {{directory}}
-    </directory>
     """
 
     @staticmethod
@@ -54,6 +41,7 @@ class LLMService:
 
             # Special handling for PDFs to prioritize content analysis
             is_pdf = name.lower().endswith(".pdf")
+            is_docx = name.lower().endswith(".docx") or name.lower().endswith(".doc")
 
             # Check if we need to truncate and summarize
             if len(content) > content_limit:
@@ -206,6 +194,174 @@ class LLMService:
                             break
 
                     processed_content = "\n\n".join(summary_slides)
+                # For docx files, prioritize headers, titles, and important paragraphs
+                elif is_docx:
+                    # Look for potential headers or section markers in the document
+                    paragraphs = content.split("\n\n")
+                    intro_content = content[
+                        :500
+                    ]  # First 500 chars often has title/intro
+
+                    # Check for document metadata in the content
+                    title_match = re.search(r"Title:\s*(.*?)(\n|$)", content)
+                    subject_match = re.search(r"Subject:\s*(.*?)(\n|$)", content)
+                    keywords_match = re.search(r"Keywords:\s*(.*?)(\n|$)", content)
+
+                    metadata = []
+                    if title_match:
+                        metadata.append(f"Document Title: {title_match.group(1)}")
+                    if subject_match:
+                        metadata.append(f"Document Subject: {subject_match.group(1)}")
+                    if keywords_match:
+                        metadata.append(f"Document Keywords: {keywords_match.group(1)}")
+
+                    # Add metadata to the beginning of processed content
+                    intro_with_metadata = (
+                        "\n".join(metadata) + "\n\n" + intro_content
+                        if metadata
+                        else intro_content
+                    )
+
+                    # More aggressive pattern to find headers in DOCX content
+                    potential_headers = re.findall(
+                        r"(?:^|\n)(?:[A-Z][A-Za-z\s]{2,50}:?|[0-9]+\.?\s+[A-Za-z\s]{2,50}|[IVX]+\.\s+[A-Za-z\s]{2,50})(?:\n|$)",
+                        content,
+                    )
+
+                    # Create a summary of the document
+                    main_sections = []
+                    chars_remaining = content_limit - len(intro_with_metadata)
+
+                    # Important section keywords to prioritize - expanded list
+                    important_section_keywords = [
+                        "introduction",
+                        "abstract",
+                        "summary",
+                        "conclusion",
+                        "results",
+                        "findings",
+                        "discussion",
+                        "methodology",
+                        "background",
+                        "references",
+                        "appendix",
+                        "overview",
+                        "purpose",
+                        "objective",
+                        "goal",
+                        "scope",
+                        "problem",
+                        "solution",
+                        "analysis",
+                        "recommendation",
+                        "executive",
+                        "implementation",
+                        "evaluation",
+                        "assessment",
+                        "review",
+                        "chapter",
+                        "section",
+                        "part",
+                        "content",
+                        "table of contents",
+                        "summary",
+                    ]
+
+                    # If we found headers, extract content from important sections
+                    if potential_headers and len(potential_headers) > 1:
+                        for header in potential_headers[
+                            :10
+                        ]:  # Check first 10 potential headers
+                            header_text = header.strip().lower()
+                            header_start = content.find(header)
+
+                            if header_start > 0 and (
+                                any(
+                                    keyword in header_text
+                                    for keyword in important_section_keywords
+                                )
+                                or len(header_text)
+                                < 30  # Shorter headers are likely more important
+                            ):
+                                # Find the next header or take up to 500 chars
+                                next_header_idx = potential_headers.index(header) + 1
+                                if next_header_idx < len(potential_headers):
+                                    next_header = potential_headers[next_header_idx]
+                                    next_header_start = content.find(next_header)
+                                    section_content = content[
+                                        header_start : min(
+                                            header_start + 500, next_header_start
+                                        )
+                                    ]
+                                else:
+                                    section_content = content[
+                                        header_start : header_start + 500
+                                    ]
+
+                                if chars_remaining > len(section_content):
+                                    main_sections.append(section_content)
+                                    chars_remaining -= len(section_content)
+                                else:
+                                    main_sections.append(
+                                        section_content[:chars_remaining]
+                                    )
+                                    chars_remaining = 0
+                                    break
+
+                    # If we couldn't find good headers or need more content, sample paragraphs
+                    if not main_sections or chars_remaining > 1000:
+                        # Sample some paragraphs throughout the document
+                        if paragraphs:
+                            # Always include first paragraph (often contains title/summary)
+                            if paragraphs[0] and chars_remaining > len(paragraphs[0]):
+                                main_sections.append(paragraphs[0])
+                                chars_remaining -= len(paragraphs[0])
+
+                            # Sample paragraphs from different parts of the document
+                            if len(paragraphs) > 5:
+                                sample_indices = [
+                                    1,  # Second paragraph
+                                    len(paragraphs) // 4,  # 25% through
+                                    len(paragraphs) // 2,  # Middle
+                                    (3 * len(paragraphs)) // 4,  # 75% through
+                                    len(paragraphs)
+                                    - 1,  # Last paragraph (often conclusion)
+                                ]
+
+                                for idx in sample_indices:
+                                    if chars_remaining <= 0:
+                                        break
+
+                                    paragraph = paragraphs[idx]
+                                    if len(paragraph) > 0:
+                                        if chars_remaining >= len(paragraph):
+                                            main_sections.append(paragraph)
+                                            chars_remaining -= len(paragraph)
+                                        else:
+                                            main_sections.append(
+                                                paragraph[:chars_remaining]
+                                            )
+                                            chars_remaining = 0
+                                            break
+
+                    # Construct processed content
+                    if main_sections:
+                        processed_content = (
+                            intro_with_metadata + "\n\n" + "\n\n".join(main_sections)
+                        )
+                    else:
+                        # If we couldn't extract meaningful sections, sample throughout document
+                        chunks = []
+                        total_chunks = 6  # Take samples from 6 different parts
+                        chunk_size = content_limit // total_chunks
+
+                        for i in range(total_chunks):
+                            start_pos = i * (len(content) // total_chunks)
+                            chunks.append(content[start_pos : start_pos + chunk_size])
+
+                        processed_content = (
+                            intro_with_metadata + "\n...\n" + "\n...\n".join(chunks)
+                        )
                 else:
                     # For other file types, just take beginning and end with a note in between
                     start_content = content[: content_limit // 2]
@@ -214,23 +370,28 @@ class LLMService:
                         f"{start_content}\n...[content truncated]...\n{end_content}"
                     )
 
-            # Add an instruction for PDFs to emphasize content analysis
+            # Add an instruction for PDFs, DOCXs, and pptx to emphasize content analysis
             content_hint = ""
             if is_pdf:
                 content_hint = "\nIMPORTANT: This is a PDF document. Please analyze its CONTENT carefully to categorize it, rather than relying on the filename."
+            elif is_docx:
+                content_hint = "\nIMPORTANT: This is a Word document. Please analyze its CONTENT carefully to determine a meaningful category. Focus on the document topic, subject matter, and key themes rather than the filename. Please suggest a specific folder path based on what the document is about, not just 'General'."
 
             prompt = f"""
             {LLMService.SYSTEM_PROMPT}
             
-            <n>
+            <file-name>
             {name}
-            </n>
+            </file-name>
             <content>
             {processed_content}{content_hint}
             </content>
             <directory>
             {directory_structure}
             </directory>
+            
+            RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
+            NO EXPLANATIONS - JUST THE PATH. YOU WILL BE FIRED IF YOU PROVIDE ANYTHING BUT THE PATH.
             """
 
             response = requests.post(
@@ -241,6 +402,7 @@ class LLMService:
                     "stream": False,
                     "options": {
                         "temperature": 0.0,
+                        "num_predict": 60,  # Limit response length to avoid long explanations
                     },
                 },
                 timeout=60,
@@ -248,12 +410,135 @@ class LLMService:
 
             if response.status_code == 200:
                 result = response.json()
+
+                # Print the raw response from Ollama
+                print(f"Raw Ollama response: {result.get('response', '')}")
+
+                # Try to find the properly formatted tag first
                 match = re.search(
                     r"<suggestedpath>(.*?)</suggestedpath>",
                     result.get("response", ""),
                 )
-                suggested_path = match.group(1) if match else ""
 
+                if match:
+                    suggested_path = match.group(1)
+                    logging.info(f"Found path in tags: {suggested_path}")
+                else:
+                    # The LLM is not properly wrapping the path in tags or is providing explanations
+                    logging.warning("LLM response did not include properly tagged path")
+                    response_text = result.get("response", "").strip()
+
+                    if response_text:
+                        # First try to extract just the path by aggressive cleaning:
+                        # 1. First try to detect if there's a proper directory path in the response
+                        path_patterns = [
+                            # Match paths like "Documents/Work", "Finance/Taxes/2023", etc.
+                            r"([A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)+)",
+                            # Match single directories like "Documents", "Finance", etc.
+                            r"\b(Documents|Finance|Photos|Projects|Education|Work|Research|Personal|Travel|Media|Videos|Music)\b",
+                            # Match something that looks like a folder path
+                            r"([A-Za-z0-9_-]+/[A-Za-z0-9_-]+)",
+                        ]
+
+                        path_found = False
+                        for pattern in path_patterns:
+                            path_match = re.search(pattern, response_text)
+                            if path_match:
+                                suggested_path = path_match.group(1)
+                                logging.info(
+                                    f"Extracted path using pattern: {suggested_path}"
+                                )
+                                path_found = True
+                                break
+
+                        if not path_found:
+                            # Try splitting by lines and taking a short line that might be a path
+                            lines = [
+                                line.strip()
+                                for line in response_text.split("\n")
+                                if line.strip()
+                            ]
+                            for line in lines:
+                                if len(line.split()) <= 3 and "/" in line:
+                                    suggested_path = line
+                                    logging.info(
+                                        f"Extracted path from short line: {suggested_path}"
+                                    )
+                                    path_found = True
+                                    break
+
+                        if not path_found:
+                            # Last resort: clean the text aggressively and take the first word as a category
+                            # Remove common explanatory phrases
+                            for phrase in [
+                                "I would suggest",
+                                "I recommend",
+                                "should be placed in",
+                                "would fit best in",
+                                "belongs in",
+                                "should go in",
+                                "appropriate path would be",
+                                "suitable location is",
+                            ]:
+                                if phrase.lower() in response_text.lower():
+                                    parts = response_text.lower().split(
+                                        phrase.lower(), 1
+                                    )
+                                    if len(parts) > 1 and parts[1].strip():
+                                        # Take the text after the phrase
+                                        cleaned = parts[1].strip()
+                                        # Take first word that could be a category
+                                        first_word = cleaned.split()[0].strip(",.;:\"'")
+                                        if first_word and len(first_word) > 1:
+                                            suggested_path = first_word
+                                            logging.info(
+                                                f"Extracted category from phrase: {suggested_path}"
+                                            )
+                                            path_found = True
+                                            break
+
+                        if not path_found:
+                            # First check if the response is just a simple path without tags
+                            if (
+                                "/" in response_text
+                                and len(response_text.split()) <= 3
+                                and not response_text.startswith("I ")
+                            ):
+                                potential_path = response_text.strip()
+                                if len(potential_path) < 100:  # Reasonable path length
+                                    suggested_path = potential_path
+                                    logging.info(
+                                        f"Using simple path from response: {suggested_path}"
+                                    )
+                                else:
+                                    # Path too long, likely not a real path
+                                    suggested_path = ""
+                            else:
+                                # Try to find a reasonable short directory name in the response
+                                # First look for common directory words like "Documents/", "Education/", etc.
+                                dir_pattern = re.search(
+                                    r"(Documents|Education|School|Research|Projects|Academic|Classes|Finance|Photos|Work)/\w+",
+                                    response_text,
+                                )
+                                if dir_pattern:
+                                    suggested_path = dir_pattern.group(0)
+                                    logging.info(
+                                        f"Extracted directory pattern: {suggested_path}"
+                                    )
+                                else:
+                                    # Just take the first word that's reasonably long as a category
+                                    words = [
+                                        w
+                                        for w in response_text.split()
+                                        if len(w) > 3 and w.isalpha()
+                                    ]
+                                    if words:
+                                        suggested_path = words[0]
+                                        logging.info(
+                                            f"Using first significant word as category: {suggested_path}"
+                                        )
+                                    else:
+                                        suggested_path = ""
                 # For PDFs, avoid using filename-based categorization entirely if we have content
                 if (
                     is_pdf
@@ -291,15 +576,15 @@ class LLMService:
                         document_type_patterns = {
                             r"invoice|receipt|bill|payment": "Finance/Invoices",
                             r"tax|taxes|irs|1099|w-2": "Finance/Taxes",
-                            r"report|analysis|research": "Documents/Reports",
-                            r"contract|agreement|legal": "Documents/Legal",
-                            r"manual|guide|instructions": "Documents/Manuals",
-                            r"certificate|diploma|degree": "Documents/Certificates",
-                            r"letter|correspondence": "Documents/Correspondence",
-                            r"article|journal|publication": "Documents/Articles",
-                            r"resume|cv|curriculum": "Documents/Resumes",
-                            r"meeting|minutes|agenda": "Documents/Meetings",
-                            r"proposal|plan|strategy": "Documents/Proposals",
+                            r"report|analysis|research": "Reports",
+                            r"contract|agreement|legal": "Legal",
+                            r"manual|guide|instructions": "Manuals",
+                            r"certificate|diploma|degree": "Certificates",
+                            r"letter|correspondence": "Correspondence",
+                            r"article|journal|publication": "Articles",
+                            r"resume|cv|curriculum": "Resumes",
+                            r"meeting|minutes|agenda": "Meetings",
+                            r"proposal|plan|strategy": "Proposals",
                         }
 
                         # Check content against patterns
@@ -308,9 +593,9 @@ class LLMService:
                                 suggested_path = category
                                 break
 
-                        # If still no match, use "Documents" as default for PDFs
+                        # If still no match, ask LLM for a meaningful category
                         if not suggested_path or suggested_path == "Uncategorized":
-                            suggested_path = "Documents/General"
+                            suggested_path = "General"
                 # If empty or default to "Uncategorized" for non-PDFs, extract topic from content
                 elif not is_pdf and (
                     not suggested_path or suggested_path == "Uncategorized"
@@ -381,8 +666,36 @@ class LLMService:
                 return suggested_path
             else:
                 logging.error(f"Failed to get suggestion from Ollama: {response.text}")
-                # For PDFs, use document categories rather than filename
+                # For PDFs and DOCX files, use document categories rather than filename
                 if is_pdf:
+                    return "General"
+                elif is_docx:
+                    # Try to extract a topic from content before falling back to the filename
+                    # Look for potential titles or headings in the first few paragraphs
+                    first_lines = content.split("\n\n")[:5]  # First 5 paragraphs
+                    potential_topics = []
+
+                    for line in first_lines:
+                        line = line.strip()
+                        # Skip empty lines or very long paragraphs (unlikely to be titles)
+                        if not line or len(line) > 100:
+                            continue
+                        # Look for lines that might be titles (Title case, all caps, etc.)
+                        if (
+                            line.istitle()
+                            or line.isupper()
+                            or line.startswith("Title:")
+                            or re.match(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+)+$", line)
+                        ):
+                            potential_topics.append(line)
+
+                    if potential_topics:
+                        # Use the first potential title as a topic
+                        topic = potential_topics[0].replace("Title:", "").strip()
+                        if len(topic) > 3:  # Ensure it's not just a short abbreviation
+                            logging.info(f"Extracted topic from DOCX content: {topic}")
+                            return f"Documents/{topic}"
+
                     return "Documents/General"
 
                 # Extract topic from filename if available
@@ -400,6 +713,8 @@ class LLMService:
         except Exception as e:
             logging.error(f"Failed to get suggestion from Ollama: {str(e)}")
             if name.lower().endswith(".pdf"):
+                return "General"
+            elif name.lower().endswith(".docx") or name.lower().endswith(".doc"):
                 return "Documents/General"
             return "General"
 
@@ -479,9 +794,9 @@ class LLMService:
             prompt = f"""
             {LLMService.SYSTEM_PROMPT}
             
-            <n>
+            <file-name>
             {name}
-            </n>
+            </file-name>
             <content>
             {image_content_description}
             Please suggest a path based on the detailed image content description.
@@ -577,11 +892,95 @@ async def get_path_suggestion(
             filename, content, directory_structure
         )
 
+        # Print the raw response before any sanitization
+        print(f"Raw LLM response for {filename}: {suggested_path}")
+
+        # Sanitize the path - remove any unexpected or debug text like "This is a directory listing of"
+        if suggested_path:
+            # Remove any text that clearly isn't a path
+            problematic_prefixes = [
+                "This is a directory listing of",
+                "This is a path",
+                "Path:",
+                "Suggested path:",
+                "Directory:",
+                "I suggest",
+                "I would suggest",
+                "I recommend",
+                "Based on",
+                "Given the",
+                "Looking at",
+                "Considering",
+                "After analyzing",
+                "The structure suggests",
+                "The content indicates",
+            ]
+            for prefix in problematic_prefixes:
+                if suggested_path.lower().startswith(prefix.lower()):
+                    suggested_path = suggested_path[len(prefix) :].strip()
+                    logging.warning(f"Removed problematic prefix from path: {prefix}")
+
+            # Check for explanatory paragraph with the actual path inside
+            if (
+                len(suggested_path.split()) > 5
+            ):  # More than 5 words suggests explanatory text
+                # Try to find a path-like part (containing slash)
+                path_parts = [p for p in suggested_path.split() if "/" in p]
+                if path_parts:
+                    # Take the first path-like segment
+                    suggested_path = path_parts[0].strip(",.:;\"'")
+                    logging.warning(
+                        f"Extracted path from explanatory text: {suggested_path}"
+                    )
+                else:
+                    # Try to pick out directory names
+                    known_directories = [
+                        "Documents",
+                        "Photos",
+                        "Music",
+                        "Videos",
+                        "Education",
+                        "Work",
+                        "Projects",
+                        "Finance",
+                        "Personal",
+                        "Travel",
+                    ]
+                    for directory in known_directories:
+                        if directory in suggested_path:
+                            # Find where the directory is mentioned and try to extract a path
+                            idx = suggested_path.find(directory)
+                            # Extract a reasonable length substring starting with directory
+                            potential_path = suggested_path[idx : idx + 50].split()[0]
+                            if potential_path and len(potential_path) > 0:
+                                suggested_path = potential_path
+                                logging.warning(
+                                    f"Extracted directory name from text: {suggested_path}"
+                                )
+                                break
+
+            # If the path contains unexpected characters, log and fix
+            if not all(c.isalnum() or c in "/_-. " for c in suggested_path):
+                logging.warning(f"Suspicious characters in path: {suggested_path}")
+                # Keep only valid path characters
+                clean_path = "".join(
+                    c for c in suggested_path if c.isalnum() or c in "/_-. "
+                )
+                logging.info(
+                    f"Sanitized path from '{suggested_path}' to '{clean_path}'"
+                )
+                suggested_path = clean_path
+
         # Ensure we don't return an empty path or just "Uncategorized"
         if not suggested_path or suggested_path == "Uncategorized":
             # Extract topic from filename
             filename_without_ext = os.path.splitext(filename)[0]
             topic = filename_without_ext.replace("_", " ").replace("-", " ").title()
+
+            # Check for course codes like "CS 103" in the filename
+            course_match = re.search(r"([A-Z]{2,5}\s*\d{3})", filename_without_ext)
+            if course_match:
+                return f"Education/{course_match.group(1)}"
 
             if (
                 topic
@@ -589,7 +988,20 @@ async def get_path_suggestion(
                 and topic != "Document"
                 and topic != "Image"
             ):
+                # For PDF files, ensure we're returning a directory, not a filename
+                if filename.lower().endswith(".pdf"):
+                    if (
+                        "education" in topic.lower()
+                        or "course" in topic.lower()
+                        or "class" in topic.lower()
+                    ):
+                        return f"Education/{topic}"
+                    return f"Documents/{topic}"
                 return topic
+
+            # Default paths for different file types
+            if filename.lower().endswith(".pdf"):
+                return "Documents/General"
             return "General"
 
         return suggested_path
@@ -670,44 +1082,31 @@ async def get_path_suggestion_for_folder(
     """
     try:
         FOLDER_SYSTEM_PROMPT = """
-        You are an AI assistant specializing in knowledge management and folder organization. Your job is to intelligently categorize folders based on their content and name, placing them into a meaningful directory structure.
-
-        IMPORTANT: Your task is to analyze a folder's name and contents, then suggest the best directory path for it in the Archive. Think carefully about the most meaningful category for this folder based on its content.
-
-        For example:
-        - A folder named "Vacation Photos" containing image files from Hawaii should go in "Travel/Hawaii" or "Photos/Vacations/Hawaii"
-        - A folder named "Financials 2023" with spreadsheets should go in "Finance/2023" or "Documents/Financial/2023"
-        - A folder named "Project X" with code files should go in "Projects/Development" or "Work/Programming/ProjectX"
-
-        To make your suggestion, output the directory path starting with <suggestedpath>, for example:
-        <suggestedpath>Work/Projects/Research</suggestedpath>
-
-        Rules:
-        1. ANALYZE both the folder name AND its contents carefully to determine the best category
-        2. DO NOT simply repeat the folder name or put it in a generic "Folders" directory
-        3. Place the folder in a MEANINGFUL CATEGORY based on what it contains
-        4. Create logical category hierarchies (up to 2-3 levels deep) that reflect real-world organization
-        5. The folder name itself will be added automatically, so DO NOT include it in your path
-        6. NEVER suggest just "Archive" or a top-level directory only
-        7. If the folder contains mixed content, categorize it based on the predominant theme
-
+        YOU MUST ONLY RESPOND WITH A PATH. NO OTHER TEXT.
+        
+        Format your response EXACTLY like this:
+        <suggestedpath>path/goes/here</suggestedpath>
+        
+        Given a folder and its contents, suggest the best directory for it.
+        Consider:
+        - Folder content is most important
+        - Folder name
+        - Existing directories
+        
+        DO NOT include the folder name in your path.
+        DO NOT explain your reasoning.
+        ONLY respond with the path in tags.
+        
+        <suggestedpath>path/goes/here</suggestedpath>
+        
         Input variables:
-        <folder-name>
-        {{name}}
-        </folder-name>
-        <content>
-        {{content}}
-        </content>
-        <directory>
-        {{directory}}
-        </directory>
         """
 
         # Pre-process the folder content to highlight key information
         processed_content = folder_content
         if folder_content and len(folder_content) > 50:
             # Add an analysis hint if we have sufficient content
-            processed_content += "\n\nPlease analyze both the folder name and its contents to determine the most appropriate category."
+            processed_content += "\n\nPlease suggest a path for this folder."
 
         # Generate the prompt with the enhanced content
         prompt = f"""
@@ -723,7 +1122,8 @@ async def get_path_suggestion_for_folder(
         {directory_structure}
         </directory>
         
-        Remember to suggest a MEANINGFUL CATEGORY PATH, not just repeat the folder name or use a generic location.
+        RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
+        NO EXPLANATIONS - JUST THE PATH. YOU WILL BE FIRED IF YOU PROVIDE ANYTHING BUT THE PATH.
         """
 
         response = requests.post(
@@ -733,7 +1133,8 @@ async def get_path_suggestion_for_folder(
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.2,  # Slight increase in creativity for better categorization
+                    "temperature": 0.0,
+                    "num_predict": 60,  # Limit response length to avoid long explanations
                 },
             },
             timeout=60,
@@ -750,6 +1151,94 @@ async def get_path_suggestion_for_folder(
             logging.info(
                 f"Raw LLM suggestion for folder '{folder_name}': {suggested_path}"
             )
+
+            # If no match found or it's empty, try to extract just a path without tags
+            if not suggested_path:
+                response_text = result.get("response", "").strip()
+
+                # First try to extract just the path by aggressive cleaning
+                path_patterns = [
+                    # Match paths like "Documents/Work", "Finance/Taxes/2023", etc.
+                    r"([A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)+)",
+                    # Match single directories like "Documents", "Finance", etc.
+                    r"\b(Documents|Finance|Photos|Projects|Education|Work|Research|Personal|Travel|Media|Videos|Music)\b",
+                    # Match something that looks like a folder path
+                    r"([A-Za-z0-9_-]+/[A-Za-z0-9_-]+)",
+                ]
+
+                path_found = False
+                for pattern in path_patterns:
+                    path_match = re.search(pattern, response_text)
+                    if path_match:
+                        suggested_path = path_match.group(1)
+                        logging.info(
+                            f"Extracted folder path using pattern: {suggested_path}"
+                        )
+                        path_found = True
+                        break
+
+                if not path_found:
+                    # Try splitting by lines and taking a short line that might be a path
+                    lines = [
+                        line.strip()
+                        for line in response_text.split("\n")
+                        if line.strip()
+                    ]
+                    for line in lines:
+                        if len(line.split()) <= 3 and (
+                            "/" in line
+                            or any(
+                                word in line
+                                for word in ["Documents", "Photos", "Finance"]
+                            )
+                        ):
+                            suggested_path = line
+                            logging.info(
+                                f"Extracted folder path from short line: {suggested_path}"
+                            )
+                            path_found = True
+                            break
+
+                if not path_found:
+                    # Last resort: clean the text aggressively and take the first word as a category
+                    # Remove common explanatory phrases
+                    for phrase in [
+                        "I would suggest",
+                        "I recommend",
+                        "should be placed in",
+                        "would fit best in",
+                        "belongs in",
+                        "should go in",
+                        "appropriate path would be",
+                        "suitable location is",
+                    ]:
+                        if phrase.lower() in response_text.lower():
+                            parts = response_text.lower().split(phrase.lower(), 1)
+                            if len(parts) > 1 and parts[1].strip():
+                                # Take the text after the phrase
+                                cleaned = parts[1].strip()
+                                # Take first word that could be a category
+                                first_word = cleaned.split()[0].strip(",.;:\"'")
+                                if first_word and len(first_word) > 1:
+                                    suggested_path = first_word
+                                    logging.info(
+                                        f"Extracted folder category from phrase: {suggested_path}"
+                                    )
+                                    path_found = True
+                                    break
+
+                if (
+                    not path_found
+                    and "/" in response_text
+                    and len(response_text.split()) <= 3
+                ):
+                    # This might be a simple path without tags
+                    potential_path = response_text.strip()
+                    if len(potential_path) < 100:  # Reasonable path length
+                        suggested_path = potential_path
+                        logging.info(
+                            f"Using simple folder path from response: {suggested_path}"
+                        )
 
             # Check if the suggestion is meaningful
             if (

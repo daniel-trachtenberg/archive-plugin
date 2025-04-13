@@ -119,9 +119,6 @@ def limit_text_for_llm(text, max_chars=8192):
     if len(text) <= max_chars:
         return text
 
-    logging.warning(
-        f"Text exceeds {max_chars} characters ({len(text)} chars). Truncating to prevent context window overflow."
-    )
     return text[:max_chars]
 
 
