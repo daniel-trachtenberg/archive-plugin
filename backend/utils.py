@@ -101,6 +101,30 @@ def extract_text_from_pptx(file_content):
         return ""
 
 
+def limit_text_for_llm(text, max_chars=8192):
+    """
+    Limit text size to prevent exceeding LLM context window.
+    Takes the first max_chars characters from the text.
+
+    Args:
+        text (str): The input text to limit
+        max_chars (int): Maximum number of characters to keep, defaults to 8192
+
+    Returns:
+        str: The limited text
+    """
+    if not text:
+        return ""
+
+    if len(text) <= max_chars:
+        return text
+
+    logging.warning(
+        f"Text exceeds {max_chars} characters ({len(text)} chars). Truncating to prevent context window overflow."
+    )
+    return text[:max_chars]
+
+
 async def process_document(
     filename: str,
     content: bytes,
@@ -130,10 +154,13 @@ async def process_document(
         else:
             file_content = content.decode("utf-8")
 
+        # Limit text size to prevent exceeding LLM context window
+        file_content_for_llm = limit_text_for_llm(file_content)
+
         logging.info(f"Getting path suggestion for: {filename}")
         suggested_path = await llm.get_path_suggestion(
             filename=filename,
-            content=file_content,
+            content=file_content_for_llm,
             directory_structure=directory_structure,
         )
         logging.info(f"Initial suggested path: {suggested_path}")
@@ -210,12 +237,15 @@ async def process_image(
         else:
             media_type = "application/octet-stream"
 
+        # Ensure directory structure is not too large for LLM context
+        limited_dir_structure = limit_text_for_llm(directory_structure)
+
         # Send raw content for CLIP analysis instead of relying only on filename
         # The llm_service will use the image content for CLIP analysis directly
         suggested_path = await llm.get_path_suggestion_for_image(
             filename=filename,
             encoded_image=encoded_image,  # This will be decoded in the service
-            directory_structure=directory_structure,
+            directory_structure=limited_dir_structure,
             media_type=media_type,
         )
 
@@ -415,12 +445,15 @@ async def process_folder(
             logging.error(f"Error analyzing folder contents: {str(e)}")
             folder_content += "Error reading folder contents"
 
+        # Limit text size to prevent exceeding LLM context window
+        folder_content_for_llm = limit_text_for_llm(folder_content)
+
         logging.info(f"Getting path suggestion for folder: {folder_name}")
 
         # Use the specialized folder path suggestion function with the enhanced content
         suggested_path = await llm.get_path_suggestion_for_folder(
             folder_name=folder_name,
-            folder_content=folder_content,
+            folder_content=folder_content_for_llm,
             directory_structure=directory_structure,
         )
 
