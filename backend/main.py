@@ -22,7 +22,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.join(settings.ARCHIVE_DIR, "archive_log.log")),
     ],
 )
 
