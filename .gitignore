@@ -1,4 +1,8 @@
 __pycache__/
+node_modules/
+xcuserdata/
+
+.DS_Store
 .env
 .venv
-node_modules/
+.cursor/
