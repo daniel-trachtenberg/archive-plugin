@@ -11,6 +11,7 @@ from pptx import Presentation
 import shutil
 from config import settings
 from datetime import datetime
+import docx
 
 
 def extract_text_from_pdf(file_content):
@@ -101,6 +102,47 @@ def extract_text_from_pptx(file_content):
         return ""
 
 
+def extract_text_from_docx(file_content):
+    """
+    Extract text from Word .docx file.
+    """
+    try:
+        doc = docx.Document(io.BytesIO(file_content))
+        full_text = []
+
+        # Extract text from paragraphs
+        for para in doc.paragraphs:
+            if para.text:
+                full_text.append(para.text)
+
+        # Extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    if cell.text:
+                        row_text.append(cell.text)
+                if row_text:
+                    full_text.append(" | ".join(row_text))
+
+        result = "\n\n".join(full_text)
+        logging.info(
+            f"Word document extraction complete: {len(result)} characters extracted"
+        )
+
+        # Log a preview of the extracted text (first 200 chars)
+        if result:
+            logging.debug(f"Content preview: {result[:200]}...")
+
+        return result
+    except Exception as e:
+        logging.error(f"Failed to extract text from Word document: {str(e)}")
+        import traceback
+
+        logging.error(traceback.format_exc())
+        return ""
+
+
 def limit_text_for_llm(text, max_chars=8192):
     """
     Limit text size to prevent exceeding LLM context window.
@@ -148,6 +190,21 @@ async def process_document(
                 basename = os.path.splitext(os.path.basename(filename))[0]
                 processed_name = basename.replace("_", " ").replace("-", " ")
                 file_content = f"PowerPoint presentation titled: {processed_name}"
+        elif filename.lower().endswith((".docx", ".doc")):
+            file_content = extract_text_from_docx(content)
+            logging.info(
+                f"Extracted Word document content length: {len(file_content)} characters"
+            )
+
+            # Special handling for Word files with little or no extractable text
+            if not file_content or len(file_content) < 50:
+                logging.warning(
+                    f"Word document {filename} has little or no extractable text"
+                )
+                # Use filename as a fallback for content
+                basename = os.path.splitext(os.path.basename(filename))[0]
+                processed_name = basename.replace("_", " ").replace("-", " ")
+                file_content = f"Word document titled: {processed_name}"
         else:
             file_content = content.decode("utf-8")
 
