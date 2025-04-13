@@ -26,35 +26,61 @@ logging.basicConfig(
     ],
 )
 
+# Global variables for managing observer
+global_observer = None
+global_event_handler = None
+observer_lock = threading.Lock()
+
+# Function to restart file watcher with new directory
+def restart_file_watcher():
+    global global_observer, global_event_handler
+    
+    with observer_lock:
+        # Stop existing observer if it's running
+        if global_observer and global_observer.is_alive():
+            logging.info("Stopping existing file watcher...")
+            global_observer.stop()
+            global_observer.join()
+            logging.info("Existing file watcher stopped")
+        
+        # Create a new observer with the updated settings
+        event_handler = InputDirectoryHandler()
+        observer = Observer()
+        observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
+        
+        # Start the new observer
+        threading.Thread(
+            target=_run_observer_with_event_loop,
+            args=(observer, event_handler.loop),
+            daemon=True,
+        ).start()
+        
+        # Update global references
+        global_observer = observer
+        global_event_handler = event_handler
+        
+        logging.info(f"File watcher restarted for input directory: {settings.INPUT_DIR}")
+        logging.info(f"Files will be organized and stored in: {settings.ARCHIVE_DIR}")
+
 
 # Create a context manager for lifespan events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     try:
-        # Create a background thread to run the event loop for handling file events
-        event_handler = InputDirectoryHandler()
-        observer = Observer()
-        observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
-
-        # Start file watching thread
-        threading.Thread(
-            target=_run_observer_with_event_loop,
-            args=(observer, event_handler.loop),
-            daemon=True,
-        ).start()
-
-        logging.info(f"File watcher started for input directory: {settings.INPUT_DIR}")
-        logging.info(f"Files will be organized and stored in: {settings.ARCHIVE_DIR}")
-        logging.info(
-            f"Folder monitoring enabled - folders will be processed recursively"
-        )
+        restart_file_watcher()
     except Exception as e:
         logging.error(f"Failed to start file watcher: {str(e)}")
 
     yield  # This is where the app runs
 
-    # Shutdown logic if needed
+    # Shutdown logic
+    with observer_lock:
+        if global_observer and global_observer.is_alive():
+            logging.info("Stopping file watcher...")
+            global_observer.stop()
+            global_observer.join()
+            logging.info("File watcher stopped")
 
 
 # Update the FastAPI instance to use the lifespan

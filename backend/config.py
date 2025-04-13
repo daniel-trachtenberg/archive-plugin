@@ -5,7 +5,6 @@ from pathlib import Path
 # Load environment variables from a .env file if present
 load_dotenv()
 
-
 class Settings:
     # Application settings
     APP_TITLE: str = "Archive"
