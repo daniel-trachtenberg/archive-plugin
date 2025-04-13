@@ -5,6 +5,7 @@ import json
 import os
 from config import settings
 from services import image_analysis_service
+import base64
 
 
 class LLMService:
@@ -1024,8 +1025,6 @@ async def get_path_suggestion_for_image(
         image_content = None
         if encoded_image and isinstance(encoded_image, str):
             try:
-                import base64
-
                 image_content = base64.b64decode(encoded_image)
             except Exception as e:
                 logging.error(f"Error decoding image: {str(e)}")
@@ -1423,3 +1422,279 @@ async def get_path_suggestion_for_folder(
     except Exception as e:
         logging.error(f"Error getting path suggestion for folder: {str(e)}")
         return "Documents"
+
+
+async def get_file_summary(filename: str, content: str) -> str:
+    """
+    Generate a concise 3-sentence summary of a file's content.
+
+    Args:
+        filename (str): The name of the file
+        content (str): The content of the file
+
+    Returns:
+        str: A 3-sentence summary of the file content
+    """
+    try:
+        # Process content to appropriate length for LLM
+        processed_content = content
+        content_limit = 5000
+
+        if len(content) > content_limit:
+            processed_content = content[:content_limit]
+
+        prompt = f"""
+        You are an AI assistant tasked with summarizing file content.
+        
+        <file-name>
+        {filename}
+        </file-name>
+        <content>
+        {processed_content}
+        </content>
+        
+        Provide a concise 3-sentence summary of the file content.
+        Focus on the key topics, purpose, and main information in the file.
+        Be specific about what the file contains.
+        Format your response EXACTLY like this:
+        <summary>Your three sentence summary here.</summary>
+        """
+
+        response = requests.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": settings.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                },
+            },
+            timeout=60,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            raw_response = result.get("response", "")
+
+            match = re.search(r"<summary>(.*?)</summary>", raw_response, re.DOTALL)
+
+            if match:
+                summary = match.group(1).strip()
+                logging.info(f"Generated summary for file '{filename}'")
+                return summary
+            else:
+                # If tag not found, use the whole response as summary
+                summary = raw_response.strip()
+                logging.info(f"Using raw response as summary for '{filename}'")
+                return summary
+        else:
+            logging.error(f"Failed to get summary from LLM: {response.status_code}")
+            return ""
+    except Exception as e:
+        logging.error(f"Error generating file summary: {str(e)}")
+        return ""
+
+
+async def get_path_from_summary(
+    filename: str,
+    summary: str,
+    directory_structure: str,
+) -> str:
+    """
+    Get a path suggestion based on a file summary and directory structure.
+
+    Args:
+        filename (str): The name of the file
+        summary (str): A summary of the file content
+        directory_structure (str): The current directory structure
+
+    Returns:
+        str: A suggested path for the file
+    """
+    try:
+        prompt = f"""
+        {LLMService.SYSTEM_PROMPT}
+        
+        <file-name>
+        {filename}
+        </file-name>
+        <content-summary>
+        {summary}
+        </content-summary>
+        <directory>
+        {directory_structure}
+        </directory>
+        
+        RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
+        NO EXPLANATIONS - JUST THE PATH.
+        """
+
+        response = requests.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": settings.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 60,
+                },
+            },
+            timeout=60,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            raw_response = result.get("response", "")
+
+            # Try to find the properly formatted tag first
+            match = re.search(
+                r"<suggestedpath>(.*?)</suggestedpath>",
+                raw_response,
+            )
+
+            if match:
+                suggested_path = match.group(1)
+                logging.info(f"Found path in tags based on summary: {suggested_path}")
+                return suggested_path
+            else:
+                # Use the same fallback logic from get_suggestion_from_ollama
+                response_text = raw_response.strip()
+
+                if response_text:
+                    # Extract path using patterns
+                    path_patterns = [
+                        r"([A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)+)",
+                        r"\b(Documents|Finance|Photos|Projects|Education|Work|Research|Personal|Travel|Media|Videos|Music)\b",
+                        r"([A-Za-z0-9_-]+/[A-Za-z0-9_-]+)",
+                    ]
+
+                    for pattern in path_patterns:
+                        path_match = re.search(pattern, response_text)
+                        if path_match:
+                            return path_match.group(1)
+
+                    # Check if the response is just a simple path
+                    if "/" in response_text and len(response_text.split()) <= 3:
+                        potential_path = response_text.strip()
+                        if len(potential_path) < 100:
+                            return potential_path
+
+                return ""
+        else:
+            logging.error(
+                f"Failed to get path suggestion from LLM: {response.status_code}"
+            )
+            return ""
+    except Exception as e:
+        logging.error(f"Error getting path suggestion from summary: {str(e)}")
+        return ""
+
+
+async def get_image_summary(
+    filename: str,
+    encoded_image: str,
+    media_type: str,
+) -> str:
+    """
+    Generate a concise 3-sentence summary of an image using image analysis.
+
+    Args:
+        filename (str): The name of the image file
+        encoded_image (str): Base64 encoded image content
+        media_type (str): The media type of the image (e.g., "image/jpeg")
+
+    Returns:
+        str: A 3-sentence summary describing the image
+    """
+    try:
+        # Try to use CLIP image analysis if available
+        # Convert base64 encoded image to binary
+        image_content = None
+        if encoded_image:
+            try:
+                image_content = base64.b64decode(encoded_image)
+            except Exception as e:
+                logging.error(f"Error decoding image: {str(e)}")
+
+        # Call image analysis with binary content
+        if image_content:
+            analysis = image_analysis_service.analyze_image(image_content)
+
+            if analysis and "description" in analysis:
+                image_description = analysis["description"]
+                logging.info(
+                    f"Generated image analysis for {filename}: {image_description}"
+                )
+            else:
+                # Fallback to using filename
+                basename = os.path.splitext(os.path.basename(filename))[0]
+                processed_name = basename.replace("_", " ").replace("-", " ")
+                image_description = f"Image file titled: {processed_name}"
+                logging.warning(
+                    f"Using filename as fallback for image analysis: {filename}"
+                )
+        else:
+            # Fallback to just using filename if image analysis failed
+            basename = os.path.splitext(os.path.basename(filename))[0]
+            processed_name = basename.replace("_", " ").replace("-", " ")
+            image_description = f"Image file titled: {processed_name}"
+            logging.warning(
+                f"Using filename as fallback for image analysis: {filename}"
+            )
+
+        # Generate a 3-sentence summary based on the image analysis
+        prompt = f"""
+        You are an AI assistant tasked with summarizing image content.
+        
+        <file-name>
+        {filename}
+        </file-name>
+        <image-analysis>
+        Image analysis: {image_description}
+        </image-analysis>
+        
+        Provide a concise 3-sentence summary of what this image contains.
+        Focus on the key subjects, colors, setting, mood, and composition.
+        Be specific about what's in the image.
+        Format your response EXACTLY like this:
+        <summary>Your three sentence summary here.</summary>
+        """
+
+        response = requests.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": settings.OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                },
+            },
+            timeout=60,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            raw_response = result.get("response", "")
+
+            match = re.search(r"<summary>(.*?)</summary>", raw_response, re.DOTALL)
+
+            if match:
+                summary = match.group(1).strip()
+                logging.info(f"Generated summary for image '{filename}'")
+                return summary
+            else:
+                # If tag not found, use the whole response as summary
+                summary = raw_response.strip()
+                logging.info(f"Using raw response as image summary for '{filename}'")
+                return summary
+        else:
+            logging.error(
+                f"Failed to get image summary from LLM: {response.status_code}"
+            )
+            return image_description if image_description else ""
+    except Exception as e:
+        logging.error(f"Error generating image summary: {str(e)}")
+        return ""

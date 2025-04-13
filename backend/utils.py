@@ -154,10 +154,19 @@ async def process_document(
         # Limit text size to prevent exceeding LLM context window
         file_content_for_llm = limit_text_for_llm(file_content)
 
-        logging.info(f"Getting path suggestion for: {filename}")
-        suggested_path = await llm.get_path_suggestion(
+        # Step 1: Generate a 3-sentence summary of the file content
+        logging.info(f"Generating summary for: {filename}")
+        file_summary = await llm.get_file_summary(
             filename=filename,
             content=file_content_for_llm,
+        )
+        logging.info(f"Generated summary: {file_summary}")
+
+        # Step 2: Get path suggestion based on the summary and directory structure
+        logging.info(f"Getting path suggestion for: {filename} based on summary")
+        suggested_path = await llm.get_path_from_summary(
+            filename=filename,
+            summary=file_summary,
             directory_structure=directory_structure,
         )
         logging.info(f"Initial suggested path: {suggested_path}")
@@ -178,8 +187,11 @@ async def process_document(
 
             logging.info(f"PowerPoint fallback path: {suggested_path}")
 
-        file_extension = os.path.splitext(filename)[1]
-        if not suggested_path.endswith(file_extension):
+        # Sanitize the suggested path to ensure proper file placement
+        suggested_path = sanitize_path_suggestion(suggested_path, filename)
+
+        # After sanitizing, check if we need to add the filename
+        if not suggested_path.endswith(filename):
             suggested_path = os.path.join(suggested_path, filename)
 
         # Clean up path parts
@@ -237,17 +249,47 @@ async def process_image(
         # Ensure directory structure is not too large for LLM context
         limited_dir_structure = limit_text_for_llm(directory_structure)
 
-        # Send raw content for CLIP analysis instead of relying only on filename
-        # The llm_service will use the image content for CLIP analysis directly
-        suggested_path = await llm.get_path_suggestion_for_image(
-            filename=filename,
-            encoded_image=encoded_image,  # This will be decoded in the service
-            directory_structure=limited_dir_structure,
-            media_type=media_type,
-        )
+        # Try to get CLIP description directly
+        image_summary = ""
+        try:
+            # Get the image summary from the CLIP model and LLM
+            image_summary = await llm.get_image_summary(
+                filename=filename,
+                encoded_image=encoded_image,
+                media_type=media_type,
+            )
+            logging.info(f"Image summary: {image_summary}")
+        except Exception as e:
+            logging.error(
+                f"Error getting image summary, falling back to direct path suggestion: {e}"
+            )
+            # Use the path suggestion for image directly on failure
+            suggested_path = await llm.get_path_suggestion_for_image(
+                filename=filename,
+                encoded_image=encoded_image,
+                directory_structure=limited_dir_structure,
+                media_type=media_type,
+            )
+            logging.info(f"Got path suggestion directly: {suggested_path}")
 
-        file_extension = os.path.splitext(filename)[1]
-        if not suggested_path.endswith(file_extension):
+        # If we got a summary, use it to get a path suggestion
+        if image_summary:
+            # Get path suggestion based on the image summary
+            logging.info(
+                f"Getting path suggestion for image: {filename} based on summary"
+            )
+            suggested_path = await llm.get_path_from_summary(
+                filename=filename,
+                summary=image_summary,
+                directory_structure=limited_dir_structure,
+            )
+            logging.info(f"Path suggestion from summary: {suggested_path}")
+
+        # Sanitize the suggested path to ensure proper file placement
+        suggested_path = sanitize_path_suggestion(suggested_path, filename)
+
+        # After sanitizing, check if we need to add the filename
+        if not suggested_path.endswith(filename):
             suggested_path = os.path.join(suggested_path, filename)
 
         # Clean up path parts
@@ -258,7 +300,7 @@ async def process_image(
             if i == 0 or path_parts[i] != path_parts[i - 1]
         ]
 
-        logging.info(f"Suggested path (with CLIP analysis): {suggested_path}")
+        logging.info(f"Suggested path (with image analysis): {suggested_path}")
 
         final_path = "/".join(corrected_path_parts)
         final_path = os.path.normpath(final_path)
@@ -445,12 +487,21 @@ async def process_folder(
         # Limit text size to prevent exceeding LLM context window
         folder_content_for_llm = limit_text_for_llm(folder_content)
 
-        logging.info(f"Getting path suggestion for folder: {folder_name}")
+        # Step 1: Generate a summary of the folder content
+        logging.info(f"Generating summary for folder: {folder_name}")
+        folder_summary = await llm.get_file_summary(
+            filename=folder_name,
+            content=folder_content_for_llm,
+        )
+        logging.info(f"Generated folder summary: {folder_summary}")
 
-        # Use the specialized folder path suggestion function with the enhanced content
-        suggested_path = await llm.get_path_suggestion_for_folder(
-            folder_name=folder_name,
-            folder_content=folder_content_for_llm,
+        # Step 2: Get path suggestion based on the folder summary
+        logging.info(
+            f"Getting path suggestion for folder: {folder_name} based on summary"
+        )
+        suggested_path = await llm.get_path_from_summary(
+            filename=folder_name,
+            summary=folder_summary,
             directory_structure=directory_structure,
         )
 
@@ -586,3 +637,87 @@ async def process_folder(
     except Exception as e:
         logging.error(f"Error processing folder: {folder_name}. Error: {str(e)}")
         return None
+
+
+def sanitize_path_suggestion(suggested_path, filename):
+    """
+    Sanitize path suggestions to ensure correct file placement.
+
+    Fixes common issues like:
+    1. Paths containing existing filenames (creating file-inside-file situations)
+    2. File extensions in directory names
+    3. Missing directory structure
+
+    Args:
+        suggested_path (str): The path suggested by the LLM
+        filename (str): The name of the file being processed
+
+    Returns:
+        str: A sanitized path that ensures proper file placement
+    """
+    logging.info(f"Sanitizing path suggestion: {suggested_path} for file {filename}")
+
+    # First, normalize path separators
+    suggested_path = suggested_path.replace("\\", "/")
+
+    # Check if the suggested path already ends with the filename
+    if suggested_path.endswith(filename):
+        # Path already includes filename - extract the directory part
+        directory_path = os.path.dirname(suggested_path)
+        logging.info(
+            f"Path already includes filename, extracted directory: {directory_path}"
+        )
+        return directory_path
+
+    # Get the base filename without path
+    basename = os.path.basename(filename)
+
+    # Check if any path component resembles a filename (contains periods)
+    path_parts = suggested_path.split("/")
+    i = 0
+    while i < len(path_parts):
+        part = path_parts[i]
+
+        # Skip empty parts
+        if not part:
+            i += 1
+            continue
+
+        # Check if this component is or contains our filename
+        if part == basename or filename in part:
+            # Remove this part as it's the filename we're trying to place
+            path_parts.pop(i)
+            logging.info(f"Removed filename from path parts at position {i}")
+            continue
+
+        # Check if this part looks like a filename with extension
+        if "." in part and not part.startswith("."):
+            # Check if it's a common file extension pattern
+            ext = os.path.splitext(part)[1].lower()
+            if ext and len(ext) <= 5:  # .html, .jpeg, .docx, etc.
+                # This looks like a filename - remove it entirely
+                path_parts.pop(i)
+                logging.info(f"Removed file-like component: {part}")
+                continue
+
+        i += 1
+
+    # Rebuild the path
+    sanitized_path = "/".join(path_parts)
+
+    # Make sure we don't have an empty path
+    if not sanitized_path:
+        file_extension = os.path.splitext(filename)[1].lower()
+        if file_extension in [".jpg", ".jpeg", ".png", ".gif"]:
+            sanitized_path = "Images"
+        elif file_extension in [".pdf", ".doc", ".docx", ".txt"]:
+            sanitized_path = "Documents"
+        elif file_extension in [".mp3", ".wav", ".flac"]:
+            sanitized_path = "Music"
+        elif file_extension in [".mp4", ".mov", ".avi"]:
+            sanitized_path = "Videos"
+        else:
+            sanitized_path = "General"
+
+    logging.info(f"Sanitized path: {sanitized_path}")
+    return sanitized_path
