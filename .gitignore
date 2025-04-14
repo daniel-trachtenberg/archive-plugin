@@ -3,6 +3,5 @@ node_modules/
 xcuserdata/
 
 .DS_Store
-.env
 .venv
 .cursor/
