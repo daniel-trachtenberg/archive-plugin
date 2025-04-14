@@ -10,20 +10,18 @@ import base64
 
 class LLMService:
     SYSTEM_PROMPT = """
-    YOU MUST ONLY RESPOND WITH A PATH. NO OTHER TEXT.
-    
-    Format your response EXACTLY like this:
-    <suggestedpath>path/goes/here</suggestedpath>
-    
-    Given a file and its content, suggest where to put it in a directory structure.
-    Consider:
-    - Content is most important for categorization
-    - File type (e.g., .txt, .jpg, .pdf)
-    - Existing directories
-    
-    DO NOT SAY ANYTHING ELSE. DO NOT EXPLAIN. ONLY PROVIDE THE PATH IN THE FORMAT SHOWN.
-    
-    <suggestedpath>path/goes/here</suggestedpath>
+    You are an AI assistant that helps organize files into a directory structure based on the file's content. You will be given the name of a file, its content or description, and the current directory structure. Your task is to analyze the file and suggest the most appropriate directory path to place it within the existing structure. If needed, you may suggest creating new directories to better categorize the file, while ensuring that the naming of any new directories is consistent with the naming of the current directory structure.
+
+    To make your suggestion, simply output the directory path starting with <suggestedpath>, for example:
+    <suggestedpath>Education/ClassName/</suggestedpath>
+
+    Remember to consider the following when making your suggestion:
+    - The content or subject matter of the file
+    - The existing directory structure and how to best fit the file within it
+    - Creating new directories if they would help better organize the file
+    - Dont create deep file paths, keep it simple and respectivly shallow
+
+    Only suggest the directory path.
     
     Input variables:
     """
@@ -1081,22 +1079,17 @@ async def get_path_suggestion_for_folder(
     """
     try:
         FOLDER_SYSTEM_PROMPT = """
-        YOU MUST ONLY RESPOND WITH A PATH. NO OTHER TEXT.
-        
-        Format your response EXACTLY like this:
-        <suggestedpath>path/goes/here</suggestedpath>
-        
-        Given a folder and its contents, suggest the best directory for it.
-        Consider:
-        - Folder content is most important
-        - Folder name
-        - Existing directories
-        
-        DO NOT include the folder name in your path.
-        DO NOT explain your reasoning.
-        ONLY respond with the path in tags.
-        
-        <suggestedpath>path/goes/here</suggestedpath>
+        You are an AI assistant that helps organize files into a directory structure based on the file's content. You will be given the name of a file, its content or description, and the current directory structure. Your task is to analyze the file and suggest the most appropriate directory path to place it within the existing structure. If needed, you may suggest creating new directories to better categorize the file, while ensuring that the naming of any new directories is consistent with the naming of the current directory structure.
+
+        To make your suggestion, simply output the directory path starting with <suggestedpath>, for example:
+        <suggestedpath>Education/ClassName/</suggestedpath>
+
+        Remember to consider the following when making your suggestion:
+        - The name of the folder
+        - The content or subject matter of the folder
+        - The existing directory structure and how to best fit the folder within it
+
+        Only suggest the directory path.
         
         Input variables:
         """
