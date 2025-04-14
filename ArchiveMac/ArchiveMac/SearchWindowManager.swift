@@ -56,7 +56,7 @@ class SearchWindowManager {
         // Position window in center of screen
         if let screenFrame = NSScreen.main?.visibleFrame {
             let windowFrame = NSRect(
-                x: screenFrame.midX - UIConstants.searchWindowWidth / 3,
+                x: screenFrame.midX - UIConstants.searchWindowWidth / 2,
                 y: screenFrame.midY,
                 width: UIConstants.searchWindowWidth,
                 height: UIConstants.searchWindowInitialHeight

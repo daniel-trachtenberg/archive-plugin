@@ -10,6 +10,9 @@ struct UploadView: View {
     @State private var uploadComplete = false
     @State private var errorMessage: String? = nil
     
+    // Keep track of security-scoped bookmarks
+    @State private var securityScopedBookmarks: [URL: Data] = [:]
+    
     var body: some View {
         VStack(spacing: 0) {
             // Header with close button
@@ -122,7 +125,15 @@ struct UploadView: View {
                 .buttonStyle(BorderedProminentButtonStyle())
             }
         }
-        .onDrop(of: [UTType.item.identifier], isTargeted: $dragOver) { providers, _ in
+        // First try the modern .dropDestination API (macOS 13+)
+        .dropDestination(for: URL.self) { droppedItems, location in
+            handleDroppedFiles(droppedItems)
+            return true
+        } isTargeted: { isTargeted in
+            dragOver = isTargeted
+        }
+        // Fallback for older macOS versions
+        .onDrop(of: [UTType.fileURL.identifier, UTType.item.identifier, UTType.content.identifier], isTargeted: $dragOver) { providers, _ in
             handleDroppedProviders(providers)
             return true
         }
@@ -227,14 +238,49 @@ struct UploadView: View {
         }
     }
     
+    private func handleDroppedFiles(_ droppedItems: [URL]) {
+        // Filter to only include file URLs
+        let fileURLs = droppedItems.filter { $0.isFileURL }
+        
+        // Add only new files that aren't already in the selection
+        for url in fileURLs {
+            if !selectedFiles.contains(url) {
+                if url.startAccessingSecurityScopedResource() {
+                    // Store a bookmark for later file access
+                    do {
+                        let bookmarkData = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                        securityScopedBookmarks[url] = bookmarkData
+                    } catch {
+                        print("Error creating bookmark for \(url.lastPathComponent): \(error.localizedDescription)")
+                    }
+                    selectedFiles.append(url)
+                } else {
+                    print("Could not access security-scoped resource: \(url.lastPathComponent)")
+                }
+            }
+        }
+    }
+    
     private func handleDroppedProviders(_ providers: [NSItemProvider]) {
         for provider in providers {
-            _ = provider.loadObject(ofClass: NSURL.self) { url, error in
-                guard let url = url as? URL else { return }
-                
-                DispatchQueue.main.async {
-                    if !self.selectedFiles.contains(url) {
-                        self.selectedFiles.append(url)
+            // Try with UTType.fileURL
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { urlData, error in
+                    if let urlData = urlData as? Data, 
+                       let url = URL(dataRepresentation: urlData, relativeTo: nil) {
+                        DispatchQueue.main.async {
+                            handleDroppedFiles([url])
+                        }
+                    }
+                }
+            }
+            // Try with NSURL
+            else if provider.canLoadObject(ofClass: NSURL.self) {
+                provider.loadObject(ofClass: NSURL.self) { url, error in
+                    if let fileURL = url as? URL {
+                        DispatchQueue.main.async {
+                            handleDroppedFiles([fileURL])
+                        }
                     }
                 }
             }
@@ -280,6 +326,23 @@ struct UploadView: View {
                 for fileURL in selectedFiles {
                     let destinationURL = inputFolderURL.appendingPathComponent(fileURL.lastPathComponent)
                     
+                    // Access the file using security-scoped bookmark if available
+                    var didStartAccessing = false
+                    if let bookmarkData = securityScopedBookmarks[fileURL] {
+                        do {
+                            var isStale = false
+                            let resolvedURL = try URL(resolvingBookmarkData: bookmarkData, 
+                                                     options: .withSecurityScope, 
+                                                     relativeTo: nil, 
+                                                     bookmarkDataIsStale: &isStale)
+                            didStartAccessing = resolvedURL.startAccessingSecurityScopedResource()
+                        } catch {
+                            print("Error resolving bookmark: \(error.localizedDescription)")
+                        }
+                    } else {
+                        didStartAccessing = fileURL.startAccessingSecurityScopedResource()
+                    }
+                    
                     do {
                         // Copy the file to the Input folder
                         try FileManager.default.copyItem(at: fileURL, to: destinationURL)
@@ -297,6 +360,11 @@ struct UploadView: View {
                         await MainActor.run {
                             errorMessage = "Error uploading some files. Please try again."
                         }
+                    }
+                    
+                    // Stop accessing if we started
+                    if didStartAccessing {
+                        fileURL.stopAccessingSecurityScopedResource()
                     }
                     
                     // Add a small delay to show progress animation
