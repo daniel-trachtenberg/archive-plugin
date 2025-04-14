@@ -15,6 +15,8 @@ import contextlib
 from contextlib import asynccontextmanager
 import shutil
 import time
+import services.filesystem_service as filesystem
+import services.chroma_service as chroma
 
 # Configure logging
 logging.basicConfig(
@@ -28,58 +30,136 @@ logging.basicConfig(
 # Global variables for managing observer
 global_observer = None
 global_event_handler = None
+global_archive_observer = None
+global_archive_event_handler = None
 observer_lock = threading.Lock()
+
 
 # Function to restart file watcher with new directory
 def restart_file_watcher():
-    global global_observer, global_event_handler
-    
+    global global_observer, global_event_handler, global_archive_observer, global_archive_event_handler
+
     with observer_lock:
-        # Stop existing observer if it's running
+        print("\n---------- RESTARTING FILE WATCHERS ----------")
+        # Stop existing input observer if it's running
         if global_observer and global_observer.is_alive():
-            logging.info("Stopping existing file watcher...")
+            logging.info("Stopping existing input file watcher...")
+            print("Stopping input directory watcher...")
             global_observer.stop()
             global_observer.join()
-            logging.info("Existing file watcher stopped")
-        
-        # Create a new observer with the updated settings
+            logging.info("Existing input file watcher stopped")
+
+        # Create a new input observer with the updated settings
         event_handler = InputDirectoryHandler()
         observer = Observer()
         observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
-        
-        # Start the new observer
+
+        # Start the new input observer
         threading.Thread(
             target=_run_observer_with_event_loop,
             args=(observer, event_handler.loop),
             daemon=True,
         ).start()
-        
-        # Update global references
+        print(f"Started watching input directory: {settings.INPUT_DIR}")
+
+        # Update global references for input watcher
         global_observer = observer
         global_event_handler = event_handler
-        
-        logging.info(f"File watcher restarted for input directory: {settings.INPUT_DIR}")
-        logging.info(f"Files will be organized and stored in: {settings.ARCHIVE_DIR}")
+
+        # Stop existing archive observer if it's running
+        if global_archive_observer and global_archive_observer.is_alive():
+            logging.info("Stopping existing archive file watcher...")
+            print("Stopping archive directory watcher...")
+            global_archive_observer.stop()
+            global_archive_observer.join()
+            logging.info("Existing archive file watcher stopped")
+
+        # Create a new archive observer
+        archive_event_handler = ArchiveDirectoryHandler()
+        archive_observer = Observer()
+        archive_observer.schedule(
+            archive_event_handler, path=settings.ARCHIVE_DIR, recursive=True
+        )
+
+        # Start the new archive observer
+        threading.Thread(
+            target=_run_observer_with_event_loop,
+            args=(archive_observer, archive_event_handler.loop),
+            daemon=True,
+        ).start()
+        print(f"Started watching archive directory: {settings.ARCHIVE_DIR}")
+
+        # Update global references for archive watcher
+        global_archive_observer = archive_observer
+        global_archive_event_handler = archive_event_handler
+
+        print("File watchers restarted successfully")
+        print("---------------------------------------------\n")
+
+        logging.info(
+            f"File watchers restarted. Input: {settings.INPUT_DIR}, Archive: {settings.ARCHIVE_DIR}"
+        )
 
 
 # Create a context manager for lifespan events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
+    global global_observer, global_event_handler, global_archive_observer, global_archive_event_handler
+
     try:
+        print("\n=================================================")
+        print("          STARTING ARCHIVE PLUGIN SERVER         ")
+        print("=================================================")
+
+        # Start the file watchers
+        print("\nInitializing file watchers...")
         restart_file_watcher()
+        print(f"Input directory: {settings.INPUT_DIR}")
+        print(f"Archive directory: {settings.ARCHIVE_DIR}")
+
+        # Run the reconciliation on startup
+        print("\nStarting database reconciliation process...")
+        print("This will ensure ChromaDB and the filesystem are in sync.")
+        print("See details below:\n")
+
+        reconciliation_thread = threading.Thread(
+            target=lambda: asyncio.run(utils.reconcile_filesystem_with_chroma()),
+            daemon=True,
+        )
+        reconciliation_thread.start()
+
+        print("\nServer ready! Monitoring for file changes...")
+        print("=================================================\n")
+
     except Exception as e:
-        logging.error(f"Failed to start file watcher: {str(e)}")
+        logging.error(f"Failed to start file watchers or reconciliation: {str(e)}")
+        print(f"ERROR: Failed to start system: {str(e)}")
 
     yield  # This is where the app runs
 
     # Shutdown logic
+    print("\n=================================================")
+    print("          SHUTTING DOWN ARCHIVE PLUGIN           ")
+    print("=================================================")
+
     with observer_lock:
         if global_observer and global_observer.is_alive():
-            logging.info("Stopping file watcher...")
+            logging.info("Stopping input file watcher...")
+            print("Stopping input directory watcher...")
             global_observer.stop()
             global_observer.join()
-            logging.info("File watcher stopped")
+            logging.info("Input file watcher stopped")
+
+        if global_archive_observer and global_archive_observer.is_alive():
+            logging.info("Stopping archive file watcher...")
+            print("Stopping archive directory watcher...")
+            global_archive_observer.stop()
+            global_archive_observer.join()
+            logging.info("Archive file watcher stopped")
+
+    print("Server shutdown complete.")
+    print("=================================================\n")
 
 
 # Update the FastAPI instance to use the lifespan
@@ -319,6 +399,379 @@ class InputDirectoryHandler(FileSystemEventHandler):
         finally:
             if file_path in self.processing_files:
                 self.processing_files.remove(file_path)
+
+
+class ArchiveDirectoryHandler(FileSystemEventHandler):
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        self.processing_files = set()
+        self.processing_folders = set()
+
+    def _should_skip_path(self, path):
+        """Helper method to determine if a path should be skipped"""
+        # Skip ChromaDB internal files and hidden files
+        relative_path = os.path.relpath(path, settings.ARCHIVE_DIR)
+        path_parts = relative_path.split(os.sep)
+
+        # Skip if path contains .chromadb directory
+        if ".chromadb" in path_parts:
+            return True
+
+        # Skip hidden files
+        if os.path.basename(path).startswith("."):
+            return True
+
+        return False
+
+    def _get_all_files_in_dir(self, dir_path):
+        """Get all files in a directory and its subdirectories"""
+        files = []
+        try:
+            for root, _, filenames in os.walk(dir_path):
+                for filename in filenames:
+                    # Skip hidden files
+                    if filename.startswith("."):
+                        continue
+                    file_path = os.path.join(root, filename)
+                    files.append(file_path)
+        except Exception as e:
+            logging.error(f"Error walking directory {dir_path}: {str(e)}")
+        return files
+
+    def on_moved(self, event):
+        # Handle file moves
+        if not event.is_directory:
+            # Check if source path is within Archive directory but destination is not
+            src_in_archive = not self._should_skip_path(event.src_path)
+            dest_in_archive = (
+                os.path.commonpath([event.dest_path, settings.ARCHIVE_DIR])
+                == settings.ARCHIVE_DIR
+            )
+
+            # If file was moved out of the Archive folder, treat it as a deletion
+            if src_in_archive and not dest_in_archive:
+                old_relative_path = os.path.relpath(
+                    event.src_path, settings.ARCHIVE_DIR
+                )
+
+                print(f"\n========== FILE MOVED OUT OF ARCHIVE ==========")
+                print(f"File: {old_relative_path}")
+                print(f"Destination: {event.dest_path}")
+                print(f"Treating as deletion...")
+
+                try:
+                    chroma.delete_item(old_relative_path)
+                    print(f"✓ Removed from ChromaDB")
+                    logging.info(
+                        f"Deleted item from ChromaDB (moved out): {old_relative_path}"
+                    )
+                except Exception as e:
+                    print(f"✗ Failed to delete from ChromaDB: {str(e)}")
+                    logging.error(f"Error deleting item from ChromaDB: {str(e)}")
+                return
+
+            # Normal file move within the Archive folder
+            # Skip ChromaDB files and hidden files
+            if self._should_skip_path(event.src_path) or self._should_skip_path(
+                event.dest_path
+            ):
+                return
+
+            old_relative_path = os.path.relpath(event.src_path, settings.ARCHIVE_DIR)
+            new_relative_path = os.path.relpath(event.dest_path, settings.ARCHIVE_DIR)
+
+            print(f"\n========== FILE MOVED ==========")
+            print(f"From: {old_relative_path}")
+            print(f"To:   {new_relative_path}")
+
+            try:
+                content = filesystem.fetch_content(new_relative_path)
+                if content:
+                    is_image = new_relative_path.lower().endswith(
+                        (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                    )
+                    chroma.rename(
+                        old_relative_path, new_relative_path, content, is_image=is_image
+                    )
+                    print(f"✓ ChromaDB updated with new path")
+                    logging.info(
+                        f"Updated ChromaDB after file move: {old_relative_path} -> {new_relative_path}"
+                    )
+                else:
+                    print(f"✗ Could not fetch content for {new_relative_path}")
+            except Exception as e:
+                print(f"✗ Failed to update ChromaDB: {str(e)}")
+                logging.error(f"Error updating ChromaDB after file move: {str(e)}")
+
+        # Handle directory moves/renames
+        else:
+            # Check if source path is within Archive directory but destination is not
+            src_in_archive = not self._should_skip_path(event.src_path)
+            dest_in_archive = (
+                os.path.commonpath([event.dest_path, settings.ARCHIVE_DIR])
+                == settings.ARCHIVE_DIR
+            )
+
+            # If folder was moved out of the Archive folder, treat it as a deletion
+            if src_in_archive and not dest_in_archive:
+                dir_path = event.src_path
+                dir_relative_path = os.path.relpath(dir_path, settings.ARCHIVE_DIR)
+
+                print(f"\n========== FOLDER MOVED OUT OF ARCHIVE ==========")
+                print(f"Folder: {dir_relative_path}")
+                print(f"Destination: {event.dest_path}")
+                print(f"Treating as deletion...")
+                print(
+                    f"Running reconciliation to remove any deleted files from database..."
+                )
+
+                try:
+                    # Start reconciliation in a background thread
+                    threading.Thread(
+                        target=lambda: asyncio.run(
+                            utils.reconcile_filesystem_with_chroma()
+                        ),
+                        daemon=True,
+                    ).start()
+                    print(f"✓ Started reconciliation process to clean up database")
+                    logging.info(
+                        f"Folder moved out of archive: {dir_relative_path}, started reconciliation"
+                    )
+                except Exception as e:
+                    print(f"✗ Failed to start reconciliation: {str(e)}")
+                    logging.error(
+                        f"Error starting reconciliation after folder moved out: {str(e)}"
+                    )
+                return
+
+            # Skip ChromaDB directories and hidden folders
+            if self._should_skip_path(event.src_path) or self._should_skip_path(
+                event.dest_path
+            ):
+                return
+
+            # Avoid processing if already in progress
+            if (
+                event.src_path in self.processing_folders
+                or event.dest_path in self.processing_folders
+            ):
+                return
+
+            old_dir_path = event.src_path
+            new_dir_path = event.dest_path
+
+            old_relative_path = os.path.relpath(old_dir_path, settings.ARCHIVE_DIR)
+            new_relative_path = os.path.relpath(new_dir_path, settings.ARCHIVE_DIR)
+
+            print(f"\n========== FOLDER MOVED/RENAMED ==========")
+            print(f"From: {old_relative_path}")
+            print(f"To:   {new_relative_path}")
+
+            try:
+                self.processing_folders.add(new_dir_path)
+
+                # Get all files in the directory that was moved
+                files_to_update = self._get_all_files_in_dir(new_dir_path)
+
+                if not files_to_update:
+                    print(f"No files found in moved directory: {new_relative_path}")
+                    return
+
+                print(f"Found {len(files_to_update)} files to update in ChromaDB")
+                updated_count = 0
+                failed_count = 0
+
+                for file_path in files_to_update:
+                    if self._should_skip_path(file_path):
+                        continue
+
+                    # Calculate the old and new relative paths for this file
+                    file_relative_path = os.path.relpath(
+                        file_path, settings.ARCHIVE_DIR
+                    )
+
+                    # Determine what the old path would have been for this file
+                    old_file_relative_path = file_relative_path.replace(
+                        new_relative_path, old_relative_path, 1
+                    )
+
+                    # Skip files that aren't in the database (might be new)
+                    try:
+                        content = filesystem.fetch_content(file_relative_path)
+                        if not content:
+                            print(f"✗ Could not fetch content for {file_relative_path}")
+                            failed_count += 1
+                            continue
+
+                        # Update the path in ChromaDB
+                        is_image = file_relative_path.lower().endswith(
+                            (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                        )
+
+                        # Delete the old entry and add with new path
+                        try:
+                            # Try to delete the old entry first
+                            chroma.delete_item(old_file_relative_path)
+
+                            # Add with the new path
+                            if is_image:
+                                chroma.add_image_to_collection(
+                                    file_relative_path, content
+                                )
+                            else:
+                                text_content = utils.extract_text_for_file_type(
+                                    file_relative_path, content
+                                )
+                                chroma.add_document_to_collection(
+                                    file_relative_path, text_content
+                                )
+
+                            print(f"✓ Updated path for file: {file_relative_path}")
+                            updated_count += 1
+                        except Exception as e:
+                            # File might not have been in DB, just add it
+                            if is_image:
+                                chroma.add_image_to_collection(
+                                    file_relative_path, content
+                                )
+                            else:
+                                text_content = utils.extract_text_for_file_type(
+                                    file_relative_path, content
+                                )
+                                chroma.add_document_to_collection(
+                                    file_relative_path, text_content
+                                )
+
+                            print(f"✓ Added file with new path: {file_relative_path}")
+                            updated_count += 1
+
+                    except Exception as e:
+                        print(f"✗ Failed to update {file_relative_path}: {str(e)}")
+                        failed_count += 1
+
+                print(
+                    f"\nFolder rename/move complete. Updated {updated_count} files, failed to update {failed_count} files."
+                )
+                logging.info(
+                    f"Folder rename/move processed: {old_relative_path} -> {new_relative_path}, updated {updated_count} files"
+                )
+
+            except Exception as e:
+                print(f"✗ Error processing folder move/rename: {str(e)}")
+                logging.error(f"Error processing folder move/rename: {str(e)}")
+            finally:
+                if new_dir_path in self.processing_folders:
+                    self.processing_folders.remove(new_dir_path)
+
+    def on_deleted(self, event):
+        # Handle file deletions
+        if not event.is_directory:
+            # Skip ChromaDB files and hidden files
+            if self._should_skip_path(event.src_path):
+                return
+
+            relative_path = os.path.relpath(event.src_path, settings.ARCHIVE_DIR)
+
+            print(f"\n========== FILE DELETED ==========")
+            print(f"File: {relative_path}")
+
+            try:
+                chroma.delete_item(relative_path)
+                print(f"✓ Removed from ChromaDB")
+                logging.info(f"Deleted item from ChromaDB: {relative_path}")
+            except Exception as e:
+                print(f"✗ Failed to delete from ChromaDB: {str(e)}")
+                logging.error(f"Error deleting item from ChromaDB: {str(e)}")
+
+        # Handle directory deletions
+        else:
+            # Skip ChromaDB directories and hidden folders
+            if self._should_skip_path(event.src_path):
+                return
+
+            dir_path = event.src_path
+            dir_relative_path = os.path.relpath(dir_path, settings.ARCHIVE_DIR)
+
+            print(f"\n========== FOLDER DELETED ==========")
+            print(f"Folder: {dir_relative_path}")
+
+            # Since the directory is already deleted, we can't scan it
+            # We need to run a reconciliation to clean up orphaned entries
+            print(
+                f"Running reconciliation to remove any deleted files from database..."
+            )
+
+            try:
+                # Start reconciliation in a background thread
+                threading.Thread(
+                    target=lambda: asyncio.run(
+                        utils.reconcile_filesystem_with_chroma()
+                    ),
+                    daemon=True,
+                ).start()
+                print(f"✓ Started reconciliation process to clean up database")
+                logging.info(
+                    f"Folder deletion detected for {dir_relative_path}, started reconciliation"
+                )
+            except Exception as e:
+                print(f"✗ Failed to start reconciliation: {str(e)}")
+                logging.error(
+                    f"Error starting reconciliation after folder deletion: {str(e)}"
+                )
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            # Skip ChromaDB files and hidden files
+            if self._should_skip_path(event.src_path):
+                return
+
+            relative_path = os.path.relpath(event.src_path, settings.ARCHIVE_DIR)
+
+            # Skip processing if already being processed
+            if relative_path in self.processing_files:
+                return
+
+            print(f"\n========== FILE MODIFIED ==========")
+            print(f"File: {relative_path}")
+
+            try:
+                self.processing_files.add(relative_path)
+
+                # Re-fetch the current content
+                content = filesystem.fetch_content(relative_path)
+                if content:
+                    is_image = relative_path.lower().endswith(
+                        (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                    )
+
+                    # Remove the old entry
+                    chroma.delete_item(relative_path)
+                    print(f"✓ Removed old data from ChromaDB")
+
+                    if is_image:
+                        chroma.add_image_to_collection(relative_path, content)
+                        print(f"✓ Added updated image to ChromaDB")
+                    else:
+                        # Extract text based on file type
+                        text_content = utils.extract_text_for_file_type(
+                            relative_path, content
+                        )
+                        chroma.add_document_to_collection(relative_path, text_content)
+                        print(f"✓ Added updated document to ChromaDB")
+
+                    logging.info(
+                        f"Updated item in ChromaDB after modification: {relative_path}"
+                    )
+                else:
+                    print(f"✗ Could not fetch content for {relative_path}")
+            except Exception as e:
+                print(f"✗ Failed to update ChromaDB: {str(e)}")
+                logging.error(
+                    f"Error updating item in ChromaDB after modification: {str(e)}"
+                )
+            finally:
+                if relative_path in self.processing_files:
+                    self.processing_files.remove(relative_path)
 
 
 def _run_observer_with_event_loop(observer, loop):

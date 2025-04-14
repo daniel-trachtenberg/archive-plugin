@@ -72,7 +72,32 @@ def fetch_content(path):
     Fetches file content from the filesystem.
     """
     try:
+        # Skip ChromaDB internal files
+        if ".chromadb" in path.split(os.sep):
+            logging.debug(f"Skipping ChromaDB internal file: {path}")
+            return None
+
+        # Skip hidden files
+        if os.path.basename(path).startswith("."):
+            logging.debug(f"Skipping hidden file: {path}")
+            return None
+
         full_path = os.path.join(settings.ARCHIVE_DIR, path)
+
+        # Check if file exists before trying to open it
+        if not os.path.exists(full_path):
+            logging.warning(f"File does not exist: {full_path}")
+            return None
+
+        # Check file size to avoid loading very large files
+        file_size = os.path.getsize(full_path)
+        max_size = 100 * 1024 * 1024  # 100MB max size
+        if file_size > max_size:
+            logging.warning(
+                f"File too large to load: {path} ({file_size/1024/1024:.2f} MB)"
+            )
+            return None
+
         with open(full_path, "rb") as f:
             return f.read()
     except Exception as e:

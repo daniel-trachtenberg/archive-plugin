@@ -42,7 +42,10 @@ def add_document_to_collection(
     try:
         collection = ensure_collection_exists(collection_name)
         if collection:
+            # Don't print the content - it could be binary data
+            logging.debug(f"Adding document to collection: {path}")
             collection.add(ids=[path], documents=[content])
+            logging.debug(f"Successfully added document: {path}")
             return True
         return False
     except Exception as e:
@@ -57,9 +60,12 @@ def add_image_to_collection(path: str, image: bytes, collection_name: str = "arc
     try:
         collection = ensure_collection_exists(collection_name)
         if collection:
+            # Don't print the image content - it's binary data
+            logging.debug(f"Adding image to collection: {path}")
             open_image = Image.open(io.BytesIO(image))
             image_array = np.array(open_image)
             collection.add(ids=[path], images=[image_array])
+            logging.debug(f"Successfully added image: {path}")
             return True
         return False
     except Exception as e:
@@ -121,14 +127,20 @@ def rename(
     try:
         collection = ensure_collection_exists(collection_name)
         if collection:
+            logging.debug(f"Renaming item in collection: {old_path} -> {new_path}")
             collection.delete(ids=[old_path])
+            logging.debug(f"Deleted old path: {old_path}")
 
             if is_image:
+                # Don't print the image content - it's binary data
                 open_image = Image.open(io.BytesIO(content))
                 image_array = np.array(open_image)
                 collection.add(ids=[new_path], images=[image_array])
+                logging.debug(f"Added image with new path: {new_path}")
             else:
+                # Don't print the content - it could be binary data
                 collection.add(ids=[new_path], documents=[content])
+                logging.debug(f"Added document with new path: {new_path}")
             return True
         return False
     except Exception as e:

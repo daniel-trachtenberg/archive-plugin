@@ -969,3 +969,155 @@ def sanitize_path_suggestion(suggested_path, filename):
 
     logging.info(f"Sanitized path: {sanitized_path}")
     return sanitized_path
+
+
+def extract_text_for_file_type(file_path, content):
+    """Helper function to extract text based on file type"""
+    try:
+        if file_path.lower().endswith(".pdf"):
+            return extract_text_from_pdf(content)
+        elif file_path.lower().endswith(".pptx"):
+            return extract_text_from_pptx(content)
+        elif file_path.lower().endswith((".docx", ".doc")):
+            return extract_text_from_docx(content)
+        elif file_path.lower().endswith((".xlsx", ".xls")):
+            return extract_text_from_excel(content)
+        else:
+            # Try to decode as text
+            try:
+                return content.decode("utf-8")
+            except:
+                return f"Binary file: {os.path.basename(file_path)}"
+    except Exception as e:
+        logging.error(f"Error extracting text for {file_path}: {str(e)}")
+        return f"Error extracting content from {os.path.basename(file_path)}"
+
+
+async def reconcile_filesystem_with_chroma():
+    """
+    Reconcile the filesystem with the ChromaDB database.
+    This function scans the Archive directory and ensures ChromaDB reflects its current state.
+    """
+    try:
+        print("\n========== STARTING DATABASE RECONCILIATION ==========")
+        logging.info("Starting filesystem and ChromaDB reconciliation...")
+
+        # Get all files in the Archive directory
+        def get_all_files(directory):
+            all_files = []
+            for root, _, files in os.walk(directory):
+                # Skip the entire ChromaDB directory and its subdirectories
+                if ".chromadb" in root.split(os.sep):
+                    continue
+
+                for file in files:
+                    # Skip hidden files
+                    if file.startswith("."):
+                        continue
+                    full_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(full_path, settings.ARCHIVE_DIR)
+                    all_files.append(relative_path)
+            return all_files
+
+        # Get files from file system
+        filesystem_files = set(get_all_files(settings.ARCHIVE_DIR))
+        print(f"Found {len(filesystem_files)} files in filesystem")
+
+        # Get all document IDs from ChromaDB (these are the file paths)
+        try:
+            collection = chroma.ensure_collection_exists()
+            if not collection:
+                logging.error("Could not access ChromaDB collection")
+                print("ERROR: Could not access ChromaDB collection")
+                return False
+
+            # Get all document IDs from the collection
+            chroma_content = collection.get()
+            chroma_files = set(
+                chroma_content["ids"]
+                if chroma_content
+                and "ids" in chroma_content
+                and len(chroma_content["ids"]) > 0
+                else []
+            )
+            print(f"Found {len(chroma_files)} files in ChromaDB")
+        except Exception as e:
+            logging.error(f"Error getting files from ChromaDB: {str(e)}")
+            print(f"ERROR: Failed to get files from ChromaDB: {str(e)}")
+            chroma_files = set()
+
+        # Files that exist in filesystem but not in ChromaDB need to be added
+        files_to_add = filesystem_files - chroma_files
+        print(f"Files to add to ChromaDB: {len(files_to_add)}")
+
+        if files_to_add:
+            print("\n--- Adding missing files to ChromaDB ---")
+
+        added_count = 0
+        for file_path in files_to_add:
+            try:
+                # Skip any ChromaDB internal files that might have been missed
+                if ".chromadb" in file_path.split(os.sep):
+                    continue
+
+                content = filesystem.fetch_content(file_path)
+                if content:
+                    is_image = file_path.lower().endswith(
+                        (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                    )
+
+                    if is_image:
+                        chroma.add_image_to_collection(file_path, content)
+                        print(f"✓ Added image: {file_path}")
+                        logging.info(f"Added image to ChromaDB: {file_path}")
+                        added_count += 1
+                    else:
+                        text_content = extract_text_for_file_type(file_path, content)
+                        chroma.add_document_to_collection(file_path, text_content)
+                        print(f"✓ Added document: {file_path}")
+                        logging.info(f"Added document to ChromaDB: {file_path}")
+                        added_count += 1
+                else:
+                    print(f"✗ Skipped file (could not read content): {file_path}")
+            except Exception as e:
+                logging.error(
+                    f"Error adding file to ChromaDB during reconciliation: {file_path}, {str(e)}"
+                )
+                print(f"✗ Failed to add: {file_path} - {str(e)}")
+
+        # Files that exist in ChromaDB but not in filesystem need to be removed
+        files_to_remove = chroma_files - filesystem_files
+        print(f"\nFiles to remove from ChromaDB: {len(files_to_remove)}")
+
+        if files_to_remove:
+            print("\n--- Removing obsolete files from ChromaDB ---")
+
+        removed_count = 0
+        for file_path in files_to_remove:
+            try:
+                # Skip any ChromaDB internal files that might have been included in the ChromaDB IDs
+                if ".chromadb" in file_path.split(os.sep):
+                    continue
+
+                chroma.delete_item(file_path)
+                print(f"✓ Removed: {file_path}")
+                logging.info(f"Removed file from ChromaDB: {file_path}")
+                removed_count += 1
+            except Exception as e:
+                logging.error(
+                    f"Error removing file from ChromaDB during reconciliation: {file_path}, {str(e)}"
+                )
+                print(f"✗ Failed to remove: {file_path} - {str(e)}")
+
+        print(f"\n========== RECONCILIATION COMPLETE ==========")
+        print(f"Added: {added_count} files, Removed: {removed_count} files")
+        print(f"Current database status: {len(filesystem_files)} files indexed\n")
+
+        logging.info(
+            f"Reconciliation complete. Added {added_count} files, removed {removed_count} files."
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Error during reconciliation: {str(e)}")
+        print(f"ERROR: Reconciliation failed: {str(e)}")
+        return False

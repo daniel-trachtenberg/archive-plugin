@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 router = APIRouter()
 
+
 # New model for directory configuration
 class DirectoryConfig(BaseModel):
     input_dir: str
@@ -122,51 +123,50 @@ async def get_directories():
     """
     Get the current input and archive directories.
     """
-    return {
-        "input_dir": settings.INPUT_DIR,
-        "archive_dir": settings.ARCHIVE_DIR
-    }
+    return {"input_dir": settings.INPUT_DIR, "archive_dir": settings.ARCHIVE_DIR}
+
 
 # Helper function to update .env file
 def update_env_file(input_dir: str, archive_dir: str):
     """Update the .env file with new directory paths"""
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
-    
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+
     if not os.path.exists(env_path):
         # Create .env file if it doesn't exist
-        with open(env_path, 'w') as f:
+        with open(env_path, "w") as f:
             f.write(f"ARCHIVE_DIR={archive_dir}\n")
             f.write(f"INPUT_DIR={input_dir}\n")
         return
-    
+
     # Read existing .env file
-    with open(env_path, 'r') as f:
+    with open(env_path, "r") as f:
         lines = f.readlines()
-    
+
     # Check for existing entries
     archive_found = False
     input_found = False
     new_lines = []
-    
+
     for line in lines:
-        if line.strip().startswith('ARCHIVE_DIR='):
+        if line.strip().startswith("ARCHIVE_DIR="):
             new_lines.append(f"ARCHIVE_DIR={archive_dir}\n")
             archive_found = True
-        elif line.strip().startswith('INPUT_DIR='):
+        elif line.strip().startswith("INPUT_DIR="):
             new_lines.append(f"INPUT_DIR={input_dir}\n")
             input_found = True
         else:
             new_lines.append(line)
-    
+
     # Add entries if not found
     if not archive_found:
         new_lines.append(f"ARCHIVE_DIR={archive_dir}\n")
     if not input_found:
         new_lines.append(f"INPUT_DIR={input_dir}\n")
-    
+
     # Write updated .env file
-    with open(env_path, 'w') as f:
+    with open(env_path, "w") as f:
         f.writelines(new_lines)
+
 
 @router.put("/directories", response_model=DirectoryConfig)
 async def update_directories(config: DirectoryConfig):
@@ -177,33 +177,59 @@ async def update_directories(config: DirectoryConfig):
         # Validate if paths exist or can be created
         input_path = Path(config.input_dir)
         archive_path = Path(config.archive_dir)
-        
+
         # Create directories if they don't exist
         input_path.mkdir(parents=True, exist_ok=True)
         archive_path.mkdir(parents=True, exist_ok=True)
-        
+
         # Update settings
         settings.INPUT_DIR = str(input_path)
         settings.ARCHIVE_DIR = str(archive_path)
-        
+
         # Also update ChromaDB directory which is based on archive directory
         settings.CHROMA_DB_DIR = os.path.join(settings.ARCHIVE_DIR, ".chromadb")
         Path(settings.CHROMA_DB_DIR).mkdir(parents=True, exist_ok=True)
-        
+
         # Save settings to .env file for persistence
         update_env_file(str(input_path), str(archive_path))
-        
+
         # Import the restart function here to avoid circular imports
         from main import restart_file_watcher
+
         # Restart the file watcher with new directory settings
         restart_file_watcher()
-        
-        return {
-            "input_dir": settings.INPUT_DIR,
-            "archive_dir": settings.ARCHIVE_DIR
-        }
+
+        return {"input_dir": settings.INPUT_DIR, "archive_dir": settings.ARCHIVE_DIR}
     except Exception as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update directories: {str(e)}"
+            status_code=500, detail=f"Failed to update directories: {str(e)}"
         )
+
+
+@router.post("/reconcile")
+async def reconcile():
+    """
+    Manually trigger reconciliation between filesystem and ChromaDB.
+    """
+    try:
+        print("\n=================================================")
+        print("          MANUAL RECONCILIATION TRIGGERED        ")
+        print("=================================================")
+
+        result = await utils.reconcile_filesystem_with_chroma()
+
+        if result:
+            print("Manual reconciliation completed successfully!")
+            print("=================================================\n")
+            return {
+                "status": "success",
+                "message": "Reconciliation completed successfully",
+            }
+        else:
+            print("ERROR: Manual reconciliation failed")
+            print("=================================================\n")
+            raise HTTPException(status_code=500, detail="Reconciliation failed")
+    except Exception as e:
+        print(f"ERROR: Manual reconciliation failed: {str(e)}")
+        print("=================================================\n")
+        raise HTTPException(status_code=500, detail=f"Reconciliation failed: {str(e)}")
