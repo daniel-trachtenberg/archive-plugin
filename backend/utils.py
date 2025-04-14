@@ -828,7 +828,25 @@ async def process_folder(
                                             shutil.copytree(src_sub, dst_sub)
                                     elif not os.path.exists(dst_sub):
                                         shutil.copy2(src_sub, dst_sub)
+                                    else:
+                                        # Handle duplicate files by creating a unique name
+                                        i = 1
+                                        name, ext = os.path.splitext(subitem)
+                                        while os.path.exists(dst_sub):
+                                            new_name = f"{name}_{i}{ext}"
+                                            dst_sub = os.path.join(dst, new_name)
+                                            i += 1
+                                        shutil.copy2(src_sub, dst_sub)
                         elif not os.path.exists(dst):
+                            shutil.copy2(src, dst)
+                        else:
+                            # Handle duplicate files by creating a unique name
+                            i = 1
+                            name, ext = os.path.splitext(item)
+                            while os.path.exists(dst):
+                                new_name = f"{name}_{i}{ext}"
+                                dst = os.path.join(dest_path, new_name)
+                                i += 1
                             shutil.copy2(src, dst)
                 else:
                     # Edge case: destination exists but is not a directory
@@ -848,9 +866,28 @@ async def process_folder(
                         src = os.path.join(temp_copy_path, item)
                         dst = os.path.join(dest_path, item)
                         if os.path.isdir(src):
-                            shutil.copytree(src, dst)
+                            if not os.path.exists(dst):
+                                shutil.copytree(src, dst)
+                            else:
+                                # Handle duplicate folder by creating a unique name
+                                i = 1
+                                while os.path.exists(dst):
+                                    new_name = f"{item}_{i}"
+                                    dst = os.path.join(dest_path, new_name)
+                                    i += 1
+                                shutil.copytree(src, dst)
                         else:
-                            shutil.copy2(src, dst)
+                            if not os.path.exists(dst):
+                                shutil.copy2(src, dst)
+                            else:
+                                # Handle duplicate files by creating a unique name
+                                i = 1
+                                name, ext = os.path.splitext(item)
+                                while os.path.exists(dst):
+                                    new_name = f"{name}_{i}{ext}"
+                                    dst = os.path.join(dest_path, new_name)
+                                    i += 1
+                                shutil.copy2(src, dst)
             else:
                 # Destination doesn't exist, move the temp folder to destination
                 logging.info(f"Creating new directory at destination")
