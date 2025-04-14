@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var isSaving: Bool = false
     @State private var saveSuccess: Bool = false
     @State private var errorMessage: String? = nil
+    @State private var isLoadingDirectories: Bool = false
     
     // Initialize with values from SettingsService
     init(isSettingsViewShowing: Binding<Bool>) {
@@ -51,8 +52,23 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: UIConstants.settingsGroupSpacing) {
                     // Section titles and content
-                    Text("Input Folder")
-                        .font(.headline)
+                    HStack {
+                        Text("Input Folder")
+                            .font(.headline)
+                        
+                        if isLoadingDirectories {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .padding(.leading, 4)
+                        } else {
+                            Button(action: loadDirectoriesFromBackend) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .help("Reload directories from backend")
+                        }
+                    }
                     
                     inputFolderSection
                     
@@ -124,6 +140,10 @@ struct SettingsView: View {
             )
             .frame(width: UIConstants.ruleEditWidth, height: UIConstants.ruleEditHeight)
         }
+        .task {
+            // Load directories when view appears
+            await loadDirectoriesFromBackend()
+        }
     }
     
     // MARK: - Component Views
@@ -175,7 +195,7 @@ struct SettingsView: View {
     private var organizationRulesSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
-                Text("Customize how files should be organized")
+                Text("Customize how files should be organized (map file type to destination)")
                     .font(.system(size: UIConstants.settingsLabelSize))
                     .foregroundColor(.secondary)
                 
@@ -249,6 +269,34 @@ struct SettingsView: View {
         .padding(.vertical, UIConstants.smallPadding)
     }
     
+    // MARK: - API Methods
+    
+    private func loadDirectoriesFromBackend() async {
+        isLoadingDirectories = true
+        errorMessage = nil
+        
+        do {
+            try await SettingsService.shared.loadDirectoriesFromBackend()
+            
+            // Update UI with values from the backend
+            inputFolderPath = SettingsService.shared.getInputFolder()
+            outputFolderPath = SettingsService.shared.getOutputFolder()
+            
+        } catch let error as APIError {
+            errorMessage = "Error: \(error.localizedDescription)"
+        } catch {
+            errorMessage = "Error: \(error.localizedDescription)"
+        }
+        
+        isLoadingDirectories = false
+    }
+    
+    private func loadDirectoriesFromBackend() {
+        Task {
+            await loadDirectoriesFromBackend()
+        }
+    }
+    
     // MARK: - Helper Methods
     
     private func selectFolderPath(isInput: Bool) {
@@ -281,22 +329,30 @@ struct SettingsView: View {
         SettingsService.shared.setOutputFolder(outputFolderPath)
         SettingsService.shared.saveOrganizationRules(organizationRules)
         
-        // Simulate saving to backend
-        SettingsService.shared.saveSettingsToBackend { success, error in
-            DispatchQueue.main.async {
-                isSaving = false
+        // Save to backend using Task
+        Task {
+            do {
+                _ = try await SettingsService.shared.saveSettingsToBackend()
                 
-                if success {
+                // UI updates must be done on the main thread
+                await MainActor.run {
+                    isSaving = false
                     saveSuccess = true
                     
                     // Auto-hide success message after a delay
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         saveSuccess = false
                     }
-                } else if let error = error {
+                }
+            } catch let error as APIError {
+                await MainActor.run {
+                    isSaving = false
                     errorMessage = "Error: \(error.localizedDescription)"
-                } else {
-                    errorMessage = "Unknown error occurred"
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    errorMessage = "Error: \(error.localizedDescription)"
                 }
             }
         }
@@ -332,17 +388,17 @@ struct RuleEditView: View {
             VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
                 Text("Rule Name")
                     .fontWeight(.medium)
-                TextField("e.g. Screenshots, Homework", text: $name)
+                TextField("e.g. Screenshots, Math Homework, Finances", text: $name)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
-                Text("Rule Description")
+                Text("File Descriptions")
                     .fontWeight(.medium)
-                TextField("e.g. Put my screenshots in the Screenshots folder", text: $description)
+                TextField("e.g. PDFs or images associated with my MATH 101 course", text: $description)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
                 Text("Destination Folder")
                     .fontWeight(.medium)
-                TextField("e.g. /Users/username/Pictures/Screenshots", text: $destinationFolder)
+                TextField("e.g. /Users/username/Documents/Homework/Math", text: $destinationFolder)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
                 HStack {

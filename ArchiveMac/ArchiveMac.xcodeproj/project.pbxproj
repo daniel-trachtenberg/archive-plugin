@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		4EDCFC0A2DAC617300C80031 /* HotKey in Frameworks */ = {isa = PBXBuildFile; productRef = 4EDCFC092DAC617300C80031 /* HotKey */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		4EDCFB302DAB0B7900C80031 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4EDCFC0A2DAC617300C80031 /* HotKey in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = ArchiveMac;
 			packageProductDependencies = (
+				4EDCFC092DAC617300C80031 /* HotKey */,
 			);
 			productName = "llama-stack";
 			productReference = 4EDCFB212DAB0B7800C80031 /* ArchiveMac.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 4EDCFB182DAB0B7800C80031;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4EDCFB222DAB0B7800C80031 /* Products */;
 			projectDirPath = "";
@@ -551,6 +560,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/soffes/HotKey";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4EDCFC092DAC617300C80031 /* HotKey */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */;
+			productName = HotKey;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4EDCFB192DAB0B7800C80031 /* Project object */;
 }

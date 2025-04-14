@@ -1,4 +1,5 @@
 import SwiftUI
+import HotKey
 
 @main
 struct ArchiveMacApp: App {
@@ -8,10 +9,13 @@ struct ArchiveMacApp: App {
     @State private var isSettingsViewShowing: Bool = false
     
     // Define keyboard shortcuts
-    private let searchKeyboardShortcut = KeyboardShortcut("j", modifiers: [.command, .shift])
-    private let uploadKeyboardShortcut = KeyboardShortcut("u", modifiers: [.command, .shift])
-    private let organizeKeyboardShortcut = KeyboardShortcut("o", modifiers: [.command, .shift])
+    private let searchKeyboardShortcut = KeyboardShortcut(.space, modifiers: [.option])
+    private let uploadKeyboardShortcut = KeyboardShortcut("u", modifiers: [.option])
     private let settingsKeyboardShortcut = KeyboardShortcut(",", modifiers: [.command])
+    
+    // Define hotkeys
+    private let searchHotkey = HotKey(key: .space, modifiers: [.option])
+    private let uploadHotkey = HotKey(key: .u, modifiers: [.option])
     
     // Menu constants
     private let menuWidth: CGFloat = 150
@@ -21,17 +25,17 @@ struct ArchiveMacApp: App {
         // Menu bar extra
         MenuBarExtra {
             VStack {
-                Button("Search Files") {
-                    isSearching = true
-                    showSearchWindow()
-                }
+                Button("Search Files", action: searchFiles)
                 .keyboardShortcut(searchKeyboardShortcut)
-                
-                Button("Upload File") {
-                    isUploadViewShowing = true
-                    showUploadWindow()
+                .onAppear {
+                    searchHotkey.keyDownHandler = searchFiles
                 }
+                
+                Button("Upload Files", action: uploadFiles)
                 .keyboardShortcut(uploadKeyboardShortcut)
+                .onAppear {
+                    uploadHotkey.keyDownHandler = uploadFiles
+                }
                 
                 Divider()
                 
@@ -75,6 +79,20 @@ struct ArchiveMacApp: App {
             }
         }
     }
+    
+    // MARK: Button action functions
+    
+    func searchFiles() {
+        isSearching = true
+        showSearchWindow()
+    }
+    
+    func uploadFiles() {
+        isUploadViewShowing = true
+        showUploadWindow()
+    }
+    
+    // MARK: Show window functions
     
     func showSearchWindow() {
         let searchView = SearchView(
