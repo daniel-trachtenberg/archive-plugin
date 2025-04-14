@@ -19,7 +19,7 @@ class LLMService:
     - The content or subject matter of the file
     - The existing directory structure and how to best fit the file within it
     - Creating new directories if they would help better organize the file
-    - Dont create deep file paths, keep it simple and respectivly shallow
+    - Dont create deep file paths, keep it SHALLOW (max 3 levels deep)
 
     Only suggest the directory path.
     
@@ -1088,6 +1088,7 @@ async def get_path_suggestion_for_folder(
         - The name of the folder
         - The content or subject matter of the folder
         - The existing directory structure and how to best fit the folder within it
+        - Dont create new folders for the folder, use the existing ones
 
         Only suggest the directory path.
         
