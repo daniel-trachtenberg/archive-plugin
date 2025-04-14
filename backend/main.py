@@ -421,6 +421,55 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
         if os.path.basename(path).startswith("."):
             return True
 
+        # Skip temporary folders created during folder processing
+        basename = os.path.basename(path)
+        if basename.startswith("temp_") and "_" in basename[5:]:
+            try:
+                # Check if the part after temp_ contains a timestamp (temp_foldername_timestamp)
+                parts = basename.split("_")
+                if len(parts) >= 3:
+                    # Try to parse the last part as a timestamp
+                    timestamp = parts[-1]
+                    int(timestamp)  # This will fail if it's not a number
+                    return True
+            except (ValueError, IndexError):
+                # If parsing fails, it's not our temp folder format
+                pass
+
+        # Check if the path is inside a temporary folder
+        parent_dir = os.path.dirname(path)
+        if parent_dir != settings.ARCHIVE_DIR:  # Not directly in the archive root
+            parent_basename = os.path.basename(parent_dir)
+            # Check if parent directory is a temp folder
+            if parent_basename.startswith("temp_") and "_" in parent_basename[5:]:
+                try:
+                    parts = parent_basename.split("_")
+                    if len(parts) >= 3:
+                        # Try to parse the last part as a timestamp
+                        timestamp = parts[-1]
+                        int(timestamp)  # This will fail if it's not a number
+                        return True
+                except (ValueError, IndexError):
+                    pass
+
+            # Also check if any ancestor directory is a temp folder
+            current_path = parent_dir
+            while (
+                current_path != settings.ARCHIVE_DIR
+                and os.path.dirname(current_path) != current_path
+            ):
+                current_basename = os.path.basename(current_path)
+                if current_basename.startswith("temp_") and "_" in current_basename[5:]:
+                    try:
+                        parts = current_basename.split("_")
+                        if len(parts) >= 3:
+                            timestamp = parts[-1]
+                            int(timestamp)
+                            return True
+                    except (ValueError, IndexError):
+                        pass
+                current_path = os.path.dirname(current_path)
+
         return False
 
     def _get_all_files_in_dir(self, dir_path):
@@ -437,6 +486,23 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
         except Exception as e:
             logging.error(f"Error walking directory {dir_path}: {str(e)}")
         return files
+
+    def on_created(self, event):
+        """Handle file/directory creation events in the Archive directory"""
+        # Skip if this is a temporary folder or a file within a temporary folder
+        if self._should_skip_path(event.src_path):
+            basename = os.path.basename(event.src_path)
+            if basename.startswith("temp_") and "_" in basename[5:]:
+                logging.info(f"Ignoring temporary folder creation: {event.src_path}")
+            return
+
+        # If it's a directory creation not related to temp folders, we don't need to do anything
+        # Files in this directory will be added to the DB by process_folder when the operation is complete
+        if event.is_directory:
+            return
+
+        # Normal file creation event handling can be added here if needed
+        # But this shouldn't be needed since files are explicitly added to the DB after being processed
 
     def on_moved(self, event):
         # Handle file moves
@@ -720,11 +786,16 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
                 )
 
     def on_modified(self, event):
-        if not event.is_directory:
-            # Skip ChromaDB files and hidden files
-            if self._should_skip_path(event.src_path):
-                return
+        # Skip temp folders and paths that should be skipped based on _should_skip_path
+        if self._should_skip_path(event.src_path):
+            basename = os.path.basename(event.src_path)
+            if basename.startswith("temp_") and "_" in basename[5:]:
+                logging.info(
+                    f"Ignoring modification to temporary folder: {event.src_path}"
+                )
+            return
 
+        if not event.is_directory:
             relative_path = os.path.relpath(event.src_path, settings.ARCHIVE_DIR)
 
             # Skip processing if already being processed

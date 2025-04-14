@@ -880,6 +880,49 @@ async def process_folder(
         # Log the final path to the terminal
         print(f"Folder moved to: {final_path}")
 
+        # Now that the folder is fully processed and in its final location,
+        # trigger a reconciliation to update the database with the new files
+        print(f"Updating database with the new files...")
+        try:
+            # We'll use a targeted approach to only update this specific folder
+            # rather than running a full reconciliation
+            # Get all files in the directory that was moved
+            files_to_process = []
+            for root, _, files in os.walk(dest_path):
+                for file in files:
+                    if file.startswith("."):
+                        continue
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, settings.ARCHIVE_DIR)
+                    files_to_process.append(rel_path)
+
+            print(f"Found {len(files_to_process)} files to add to the database")
+
+            # Process each file and add it to ChromaDB
+            for file_path in files_to_process:
+                try:
+                    content = filesystem.fetch_content(file_path)
+                    if content:
+                        is_image = file_path.lower().endswith(
+                            (".jpg", ".jpeg", ".png", ".gif", ".webp")
+                        )
+                        if is_image:
+                            chroma.add_image_to_collection(file_path, content)
+                        else:
+                            # Extract text based on file type
+                            text_content = extract_text_for_file_type(
+                                file_path, content
+                            )
+                            chroma.add_document_to_collection(file_path, text_content)
+                except Exception as e:
+                    logging.error(
+                        f"Error adding file to database: {file_path}. Error: {str(e)}"
+                    )
+
+            print(f"✓ Database updated with new files")
+        except Exception as e:
+            logging.error(f"Error updating database after folder processing: {str(e)}")
+
         logging.info(f"Successfully processed folder: {folder_name}")
         return final_path
     except Exception as e:
