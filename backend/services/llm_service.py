@@ -389,7 +389,6 @@ class LLMService:
             {directory_structure}
             </directory>
             
-            RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
             NO EXPLANATIONS - JUST THE PATH. YOU WILL BE FIRED IF YOU PROVIDE ANYTHING BUT THE PATH.
             """
 
@@ -1115,7 +1114,6 @@ async def get_path_suggestion_for_folder(
         {directory_structure}
         </directory>
         
-        RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
         NO EXPLANATIONS - JUST THE PATH. YOU WILL BE FIRED IF YOU PROVIDE ANYTHING BUT THE PATH.
         """
 
@@ -1520,7 +1518,6 @@ async def get_path_from_summary(
         {directory_structure}
         </directory>
         
-        RESPOND ONLY WITH: <suggestedpath>path/goes/here</suggestedpath>
         NO EXPLANATIONS - JUST THE PATH.
         """
 
