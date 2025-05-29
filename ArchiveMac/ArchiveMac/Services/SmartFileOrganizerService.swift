@@ -4,16 +4,8 @@ import Combine
 /*
  * SmartFileOrganizerService.swift
  * 
- * This is the main coordinator service for the Smart File Organizer.
- * It orchestrates file monitoring, content extraction, vector-based rule matching,
- * and file operations to provide automated file organization.
- * 
- * Features:
- * - Coordinates all organizer components
- * - Manages processing pipeline with vector embeddings
- * - Provides status updates and statistics
- * - Handles errors and recovery
- * - Manages app lifecycle integration
+ * Main coordinator service for the Smart File Organizer that orchestrates the complete file processing pipeline.
+ * Integrates file monitoring, content extraction, semantic matching, and file operations for automated organization.
  */
 
 // MARK: - Smart File Organizer Service
@@ -37,6 +29,7 @@ class SmartFileOrganizerService: ObservableObject {
         start() // Always start when initialized
     }
     
+    /// Set up file monitoring callbacks
     private func setupFileMonitoring() {
         fileMonitor.onFileDetected = { [weak self] fileURL in
             print("🔍 File detected: \(fileURL.lastPathComponent)")
@@ -44,6 +37,7 @@ class SmartFileOrganizerService: ObservableObject {
         }
     }
     
+    /// Start the organizer service with current settings
     private func start() {
         let settings = database.getSettings()
         let inputFolder = settings.inputFolder
@@ -72,7 +66,7 @@ class SmartFileOrganizerService: ObservableObject {
         print("👁 Watching for new files in: \(inputFolder)")
     }
     
-    // Public method for processing files (used by UploadView)
+    /// Process a file through the complete organization pipeline
     func processFile(_ fileURL: URL) async -> Bool {
         await MainActor.run {
             self.isProcessing = true
@@ -92,38 +86,31 @@ class SmartFileOrganizerService: ObservableObject {
         return success
     }
     
-    // Private method for actual file processing
+    /// Execute the complete file processing pipeline
     private func performFileProcessing(_ fileURL: URL) async -> Bool {
         print("🔄 Processing file: \(fileURL.lastPathComponent)")
         
         do {
-            // Extract content from file
+            // Step 1: Extract content from file
             print("📄 Extracting content from: \(fileURL.lastPathComponent)")
             let extractedContent = try await contentExtractor.extractContent(from: fileURL)
             print("✅ Extracted \(extractedContent.contentLength) characters from \(fileURL.lastPathComponent)")
             
-            // Find matching rule using vector similarity
+            // Step 2: Find matching rule using semantic analysis
             print("🧠 Finding matching rule for: \(fileURL.lastPathComponent)")
             guard let matchResult = vectorMatcher.findBestMatch(for: extractedContent) else {
                 print("❌ No matching rule found for: \(fileURL.lastPathComponent)")
                 return false
             }
             
-            let similarityPercent = Int(matchResult.similarity * 100)
-            print("✅ Found match for \(fileURL.lastPathComponent): \(matchResult.rule.name) (similarity: \(similarityPercent)%)")
+            print("✅ Match details for \(fileURL.lastPathComponent): \(matchResult.explanation)")
             
-            // Create legacy MatchResult for file operations compatibility
-            let legacyMatchResult = MatchResult(
-                rule: matchResult.rule,
-                confidence: matchResult.confidence,
-                matchedKeywords: [],
-                matchingMethod: .semantic,
-                explanation: matchResult.explanation
-            )
-            
-            // Move file to destination
+            // Step 3: Move file to destination
             print("📦 Moving \(fileURL.lastPathComponent) to: \(matchResult.rule.destinationFolder)")
-            let operationResult = await fileOperations.moveFile(from: fileURL, using: legacyMatchResult)
+            let operationResult = await fileOperations.moveFile(
+                from: fileURL, 
+                to: URL(fileURLWithPath: matchResult.rule.destinationFolder).appendingPathComponent(fileURL.lastPathComponent)
+            )
             
             if operationResult.success {
                 print("✅ Successfully organized: \(fileURL.lastPathComponent)")
@@ -139,45 +126,30 @@ class SmartFileOrganizerService: ObservableObject {
         }
     }
     
-    // Wrapper for private processFile method to maintain existing functionality
+    /// Wrapper for private processFile method to maintain compatibility
     private func processFile(_ fileURL: URL) {
         Task {
             _ = await performFileProcessing(fileURL)
         }
     }
     
-    // Public method to get recent operations (used by UploadView)
+    /// Get recent file operations for UI display
     func getRecentOperations(limit: Int = 10) -> [FileOperation] {
         return fileOperations.getRecentOperations(limit: limit)
     }
     
+    /// Update organizer settings when configuration changes
     func updateSettings() {
         print("🔄 Updating file monitoring settings...")
         fileMonitor.updateMonitoringFromSettings()
     }
     
+    /// Stop the organizer service
     func stop() {
         fileMonitor.stopMonitoring()
         DispatchQueue.main.async(qos: .userInitiated) {
             self.isActive = false
         }
         print("🛑 Smart File Organizer stopped")
-    }
-}
-
-// MARK: - Legacy MatchResult for Compatibility
-
-struct MatchResult {
-    let rule: OrganizationRule
-    let confidence: Double
-    let matchedKeywords: [String]
-    let matchingMethod: MatchingMethod
-    let explanation: String
-    
-    enum MatchingMethod {
-        case keywordExact
-        case keywordFuzzy
-        case semantic
-        case combined
     }
 } 

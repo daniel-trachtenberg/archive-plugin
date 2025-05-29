@@ -24,8 +24,7 @@ struct FileOperation {
     let sourceURL: URL
     let destinationURL: URL
     let timestamp: Date
-    let rule: OrganizationRule?
-    let matchResult: MatchResult?
+    let ruleName: String?
     
     enum OperationType {
         case move
@@ -33,14 +32,13 @@ struct FileOperation {
         case undo
     }
     
-    init(type: OperationType, sourceURL: URL, destinationURL: URL, rule: OrganizationRule? = nil, matchResult: MatchResult? = nil) {
+    init(type: OperationType, sourceURL: URL, destinationURL: URL, ruleName: String? = nil) {
         self.id = UUID()
         self.type = type
         self.sourceURL = sourceURL
         self.destinationURL = destinationURL
         self.timestamp = Date()
-        self.rule = rule
-        self.matchResult = matchResult
+        self.ruleName = ruleName
     }
 }
 
@@ -65,7 +63,6 @@ struct OperationResult {
 enum FileOperationError: Error {
     case sourceFileNotFound
     case destinationNotAccessible
-    case insufficientSpace
     case permissionDenied
     case fileInUse
     case operationCancelled
@@ -77,8 +74,6 @@ enum FileOperationError: Error {
             return "Source file not found"
         case .destinationNotAccessible:
             return "Destination folder not accessible"
-        case .insufficientSpace:
-            return "Insufficient disk space"
         case .permissionDenied:
             return "Permission denied"
         case .fileInUse:
@@ -114,28 +109,13 @@ class FileOperationsService: ObservableObject {
     
     // MARK: - Public Methods
     
-    /// Move a file to its destination based on a match result
-    func moveFile(from sourceURL: URL, using matchResult: MatchResult) async -> OperationResult {
-        let destinationFolder = matchResult.rule.destinationFolder
-        let destinationURL = URL(fileURLWithPath: destinationFolder).appendingPathComponent(sourceURL.lastPathComponent)
-        
+    /// Move a file to a specific destination
+    func moveFile(from sourceURL: URL, to destinationURL: URL, ruleName: String? = nil) async -> OperationResult {
         let operation = FileOperation(
             type: .move,
             sourceURL: sourceURL,
             destinationURL: destinationURL,
-            rule: matchResult.rule,
-            matchResult: matchResult
-        )
-        
-        return await performFileOperation(operation)
-    }
-    
-    /// Move a file to a specific destination
-    func moveFile(from sourceURL: URL, to destinationURL: URL) async -> OperationResult {
-        let operation = FileOperation(
-            type: .move,
-            sourceURL: sourceURL,
-            destinationURL: destinationURL
+            ruleName: ruleName
         )
         
         return await performFileOperation(operation)
@@ -238,9 +218,6 @@ class FileOperationsService: ObservableObject {
             // Handle file name conflicts
             let finalDestinationURL = try resolveFileNameConflict(operation.destinationURL)
             
-            // Check available space
-            try validateDiskSpace(sourceURL: operation.sourceURL, destinationURL: finalDestinationURL)
-            
             // Perform the actual file operation
             switch operation.type {
             case .move, .undo:
@@ -309,39 +286,6 @@ class FileOperationsService: ObservableObject {
         }
         
         return destinationURL
-    }
-    
-    private func validateDiskSpace(sourceURL: URL, destinationURL: URL) throws {
-        do {
-            // Get source file size
-            let sourceAttributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
-            let fileSize = sourceAttributes[.size] as? Int64 ?? 0
-            
-            // Get available space at destination volume
-            let destinationDirectory = destinationURL.deletingLastPathComponent()
-            let volumeAttributes = try fileManager.attributesOfFileSystem(forPath: destinationDirectory.path)
-            let availableSpace = volumeAttributes[.systemFreeSize] as? Int64 ?? 0
-            
-            print("📊 File size: \(formatFileSize(fileSize)), Available space: \(formatFileSize(availableSpace))")
-            
-            // Check if there's enough space (with 10% buffer, but at least 1MB minimum)
-            let bufferSpace = max(Int64(Double(fileSize) * 0.1), 1_048_576) // 1MB minimum buffer
-            let requiredSpace = fileSize + bufferSpace
-            
-            if availableSpace < requiredSpace {
-                print("❌ Insufficient space: need \(formatFileSize(requiredSpace)), have \(formatFileSize(availableSpace))")
-                throw FileOperationError.insufficientSpace
-            }
-            
-            print("✅ Sufficient space available for file operation")
-            
-        } catch FileOperationError.insufficientSpace {
-            throw FileOperationError.insufficientSpace
-        } catch {
-            // If we can't check space, proceed anyway but log warning
-            print("⚠️ Warning: Could not verify disk space: \(error.localizedDescription)")
-            print("📁 Destination: \(destinationURL.deletingLastPathComponent().path)")
-        }
     }
     
     private func mapSystemError(_ error: Error) -> FileOperationError {

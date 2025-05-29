@@ -1,6 +1,8 @@
 import Foundation
 import SwiftData
 
+// MARK: - App Settings Model
+
 @Model
 class AppSettings {
     var inputFolderPath: String
@@ -14,8 +16,10 @@ class AppSettings {
     }
 }
 
+// MARK: - Organization Rule Model
+
 @Model
-class OrganizationRuleEntity {
+class OrganizationRule {
     var id: UUID
     var name: String
     var ruleDescription: String
@@ -25,8 +29,8 @@ class OrganizationRuleEntity {
     var updatedAt: Date
     var isActive: Bool
     
-    init(id: UUID, name: String, ruleDescription: String, destinationFolder: String) {
-        self.id = id
+    init(name: String, ruleDescription: String, destinationFolder: String) {
+        self.id = UUID()
         self.name = name
         self.ruleDescription = ruleDescription
         self.destinationFolder = destinationFolder
@@ -35,46 +39,12 @@ class OrganizationRuleEntity {
         self.updatedAt = Date()
         self.isActive = true
     }
-}
-
-// MARK: - Organization Rule Model
-
-struct OrganizationRule: Codable, Identifiable, Equatable {
-    let id: UUID
-    var name: String
-    var description: String
-    var destinationFolder: String
-    var isActive: Bool
-    let createdAt: Date
-    var updatedAt: Date
     
-    init(name: String, description: String, destinationFolder: String) {
-        self.id = UUID()
+    /// Update rule properties and set updatedAt timestamp
+    func update(name: String, ruleDescription: String, destinationFolder: String) {
         self.name = name
-        self.description = description
+        self.ruleDescription = ruleDescription
         self.destinationFolder = destinationFolder
-        self.isActive = true
-        self.createdAt = Date()
         self.updatedAt = Date()
-    }
-    
-    init(id: UUID, name: String, description: String, destinationFolder: String) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.destinationFolder = destinationFolder
-        self.isActive = true
-        self.createdAt = Date()
-        self.updatedAt = Date()
-    }
-    
-    init(from entity: OrganizationRuleEntity) {
-        self.id = entity.id
-        self.name = entity.name
-        self.description = entity.ruleDescription
-        self.destinationFolder = entity.destinationFolder
-        self.isActive = entity.isActive
-        self.createdAt = entity.createdAt
-        self.updatedAt = entity.updatedAt
     }
 } 

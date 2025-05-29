@@ -62,7 +62,6 @@ struct ArchiveMacApp: App {
             .padding(menuPadding)
         } label: {
             Image(systemName: "archivebox.fill")
-                .foregroundColor(.green)
         }
         
         // Watch for search activation

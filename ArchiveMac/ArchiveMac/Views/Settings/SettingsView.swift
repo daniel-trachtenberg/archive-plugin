@@ -109,17 +109,19 @@ struct SettingsView: View {
         .shadow(radius: UIConstants.windowShadowRadius)
         .sheet(isPresented: $isEditingNewRule) {
             RuleEditView(
-                rule: editingRule ?? OrganizationRule(name: "", description: "", destinationFolder: ""),
+                rule: editingRule,
                 isPresented: $isEditingNewRule,
                 onSave: { updatedRule in
                     if let editingRule = editingRule,
                        let index = organizationRules.firstIndex(where: { $0.id == editingRule.id }) {
-                        // Update existing rule
+                        // Update existing rule in array
                         organizationRules[index] = updatedRule
                     } else {
-                        // Add new rule
+                        // Add new rule to array
                         organizationRules.append(updatedRule)
                     }
+                    // Clear editing state
+                    editingRule = nil
                 }
             )
             .frame(width: UIConstants.ruleEditWidth, height: UIConstants.ruleEditHeight)
@@ -245,7 +247,7 @@ struct SettingsView: View {
                 Text(rule.name)
                     .font(.system(size: UIConstants.settingsLabelSize, weight: .medium))
                 
-                Text("\(rule.description) → \(rule.destinationFolder)")
+                Text("\(rule.ruleDescription) → \(rule.destinationFolder)")
                     .font(.system(size: UIConstants.resultSubtitleSize))
                     .foregroundColor(.gray)
             }
@@ -296,10 +298,14 @@ struct SettingsView: View {
     }
     
     private func saveSettings() {
-        // Save settings to local storage
+        // Save settings to database
         SettingsService.shared.setInputFolder(inputFolderPath)
         SettingsService.shared.setOutputFolder(outputFolderPath)
-        SettingsService.shared.saveOrganizationRules(organizationRules)
+        
+        // Save all rules individually
+        for rule in organizationRules {
+            SettingsService.shared.saveOrganizationRule(rule)
+        }
         
         // Update Smart File Organizer settings
         SmartFileOrganizerService.shared.updateSettings()
@@ -310,25 +316,25 @@ struct SettingsView: View {
 
 struct RuleEditView: View {
     @State private var name: String
-    @State private var description: String
+    @State private var ruleDescription: String
     @State private var destinationFolder: String
-    @State private var id: UUID
+    @State private var existingRule: OrganizationRule?
     
     @Binding var isPresented: Bool
     var onSave: (OrganizationRule) -> Void
     
-    init(rule: OrganizationRule, isPresented: Binding<Bool>, onSave: @escaping (OrganizationRule) -> Void) {
-        self._name = State(initialValue: rule.name)
-        self._description = State(initialValue: rule.description)
-        self._destinationFolder = State(initialValue: rule.destinationFolder)
-        self._id = State(initialValue: rule.id)
+    init(rule: OrganizationRule?, isPresented: Binding<Bool>, onSave: @escaping (OrganizationRule) -> Void) {
+        self._name = State(initialValue: rule?.name ?? "")
+        self._ruleDescription = State(initialValue: rule?.ruleDescription ?? "")
+        self._destinationFolder = State(initialValue: rule?.destinationFolder ?? "")
+        self._existingRule = State(initialValue: rule)
         self._isPresented = isPresented
         self.onSave = onSave
     }
     
     var body: some View {
         VStack(spacing: UIConstants.settingsContentSpacing) {
-            Text(id == UUID() ? "Add Rule" : "Edit Rule")
+            Text(existingRule == nil ? "Add Rule" : "Edit Rule")
                 .font(.title3)
                 .fontWeight(.semibold)
             
@@ -340,7 +346,7 @@ struct RuleEditView: View {
                 
                 Text("File Descriptions")
                     .fontWeight(.medium)
-                TextField("e.g. PDFs or images associated with my MATH 101 course", text: $description)
+                TextField("e.g. PDFs or images associated with my MATH 101 course", text: $ruleDescription)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
                 Text("Destination Folder")
@@ -369,18 +375,20 @@ struct RuleEditView: View {
                 Spacer()
                 
                 Button("Save") {
-                    let rule = OrganizationRule(
-                        id: id,
-                        name: name,
-                        description: description,
-                        destinationFolder: destinationFolder
-                    )
+                    if let existingRule = existingRule {
+                        // Update existing rule
+                        existingRule.update(name: name, ruleDescription: ruleDescription, destinationFolder: destinationFolder)
+                        onSave(existingRule)
+                    } else {
+                        // Create new rule
+                        let newRule = OrganizationRule(name: name, ruleDescription: ruleDescription, destinationFolder: destinationFolder)
+                        onSave(newRule)
+                    }
                     
-                    onSave(rule)
                     isPresented = false
                 }
                 .buttonStyle(BorderedProminentButtonStyle())
-                .disabled(name.isEmpty || description.isEmpty || destinationFolder.isEmpty)
+                .disabled(name.isEmpty || ruleDescription.isEmpty || destinationFolder.isEmpty)
             }
         }
         .padding()

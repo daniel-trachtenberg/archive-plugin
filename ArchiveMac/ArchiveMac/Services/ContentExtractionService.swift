@@ -75,7 +75,7 @@ class ContentExtractionService {
     
     // MARK: - Configuration
     private let maxFileSize: Int = 50 * 1024 * 1024 // 50MB limit
-    private let maxTextLength: Int = 100_000 // Limit extracted text to 100k characters
+    private let maxTextLength: Int = 10_000 // Limit extracted text to 10k characters
     
     // Supported file types
     private let supportedTypes: [String: ExtractionMethod] = [
