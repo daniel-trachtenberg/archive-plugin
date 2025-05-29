@@ -39,16 +39,6 @@
 			path = ArchiveMac;
 			sourceTree = "<group>";
 		};
-		4EDCFB322DAB0B7900C80031 /* llama-stackTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "llama-stackTests";
-			sourceTree = "<group>";
-		};
-		4EDCFB3C2DAB0B7900C80031 /* llama-stackUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "llama-stackUITests";
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -81,8 +71,6 @@
 			isa = PBXGroup;
 			children = (
 				4EDCFB232DAB0B7800C80031 /* ArchiveMac */,
-				4EDCFB322DAB0B7900C80031 /* llama-stackTests */,
-				4EDCFB3C2DAB0B7900C80031 /* llama-stackUITests */,
 				4EDCFB222DAB0B7800C80031 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -136,9 +124,6 @@
 			dependencies = (
 				4EDCFB312DAB0B7900C80031 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				4EDCFB322DAB0B7900C80031 /* llama-stackTests */,
-			);
 			name = ArchiveMacTests;
 			packageProductDependencies = (
 			);
@@ -158,9 +143,6 @@
 			);
 			dependencies = (
 				4EDCFB3B2DAB0B7900C80031 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				4EDCFB3C2DAB0B7900C80031 /* llama-stackUITests */,
 			);
 			name = ArchiveMacUITests;
 			packageProductDependencies = (

@@ -8,6 +8,12 @@ struct ArchiveMacApp: App {
     @State private var isUploadViewShowing: Bool = false
     @State private var isSettingsViewShowing: Bool = false
     
+    // Database service
+    @StateObject private var database = DatabaseService.shared
+    
+    // Smart File Organizer (starts automatically)
+    private let smartOrganizer = SmartFileOrganizerService.shared
+    
     // Define keyboard shortcuts
     private let searchKeyboardShortcut = KeyboardShortcut(.space, modifiers: [.option])
     private let uploadKeyboardShortcut = KeyboardShortcut("u", modifiers: [.option])
@@ -18,7 +24,7 @@ struct ArchiveMacApp: App {
     private let uploadHotkey = HotKey(key: .u, modifiers: [.option])
     
     // Menu constants
-    private let menuWidth: CGFloat = 150
+    private let menuWidth: CGFloat = 160
     private let menuPadding: CGFloat = 8
     
     var body: some Scene {
@@ -26,16 +32,16 @@ struct ArchiveMacApp: App {
         MenuBarExtra {
             VStack {
                 Button("Search Files", action: searchFiles)
-                .keyboardShortcut(searchKeyboardShortcut)
-                .onAppear {
-                    searchHotkey.keyDownHandler = searchFiles
-                }
+                    .keyboardShortcut(searchKeyboardShortcut)
+                    .onAppear {
+                        searchHotkey.keyDownHandler = searchFiles
+                    }
                 
                 Button("Upload Files", action: uploadFiles)
-                .keyboardShortcut(uploadKeyboardShortcut)
-                .onAppear {
-                    uploadHotkey.keyDownHandler = uploadFiles
-                }
+                    .keyboardShortcut(uploadKeyboardShortcut)
+                    .onAppear {
+                        uploadHotkey.keyDownHandler = uploadFiles
+                    }
                 
                 Divider()
                 
@@ -55,7 +61,8 @@ struct ArchiveMacApp: App {
             .frame(minWidth: menuWidth)
             .padding(menuPadding)
         } label: {
-            Image(systemName: "archivebox")
+            Image(systemName: "archivebox.fill")
+                .foregroundColor(.green)
         }
         
         // Watch for search activation

@@ -11,10 +11,12 @@ struct SettingsView: View {
     // UI state
     @State private var isEditingNewRule: Bool = false
     @State private var editingRule: OrganizationRule?
-    @State private var isSaving: Bool = false
-    @State private var saveSuccess: Bool = false
-    @State private var errorMessage: String? = nil
-    @State private var isLoadingDirectories: Bool = false
+    @State private var selectedTab: SettingsTab = .folders
+    
+    enum SettingsTab: String, CaseIterable {
+        case folders = "Folders"
+        case rules = "Rules"
+    }
     
     // Initialize with values from SettingsService
     init(isSettingsViewShowing: Binding<Bool>) {
@@ -48,39 +50,34 @@ struct SettingsView: View {
             
             Divider()
             
-            // Main content
+            // Tab selection
+            HStack {
+                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    Button(tab.rawValue) {
+                        selectedTab = tab
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(selectedTab == tab ? Color.blue.opacity(0.2) : Color.clear)
+                    .cornerRadius(6)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, UIConstants.settingsContentPadding)
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            // Tab content
             ScrollView {
                 VStack(alignment: .leading, spacing: UIConstants.settingsGroupSpacing) {
-                    // Section titles and content
-                    HStack {
-                        Text("Input Folder")
-                            .font(.headline)
-                        
-                        if isLoadingDirectories {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .padding(.leading, 4)
-                        } else {
-                            Button(action: loadDirectoriesFromBackend) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 12))
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .help("Reload directories from backend")
-                        }
+                    switch selectedTab {
+                    case .folders:
+                        foldersTabContent
+                    case .rules:
+                        rulesTabContent
                     }
-                    
-                    inputFolderSection
-                    
-                    Text("Output Folder")
-                        .font(.headline)
-                    
-                    outputFolderSection
-                    
-                    Text("Organization Rules")
-                        .font(.headline)
-                    
-                    organizationRulesSection
                 }
                 .padding(UIConstants.settingsContentPadding)
             }
@@ -89,37 +86,24 @@ struct SettingsView: View {
             
             // Footer with save button
             HStack {
-                if errorMessage != nil {
-                    Text(errorMessage!)
-                        .foregroundColor(.red)
-                        .font(.system(size: UIConstants.resultSubtitleSize))
-                } else if saveSuccess {
-                    Text("Settings saved successfully")
-                        .foregroundColor(.green)
-                        .padding(.horizontal, 8)
-                        .font(.system(size: UIConstants.resultSubtitleSize))
-                }
+                Text("File organizer is running automatically")
+                    .foregroundColor(.green)
+                    .font(.system(size: UIConstants.resultSubtitleSize))
                 
                 Spacer()
                 
-                if isSaving {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 80, height: 30)
-                } else {
-                    Button("Save") {
-                        saveSettings()
-                    }
-                    .buttonStyle(BorderedProminentButtonStyle())
-                    .controlSize(.regular)
-                    .frame(width: 80)
+                Button("Save") {
+                    saveSettings()
                 }
+                .buttonStyle(BorderedProminentButtonStyle())
+                .controlSize(.regular)
+                .frame(width: 80)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 10)
             .frame(height: 50)
         }
-        .frame(width: UIConstants.settingsWindowWidth, height: UIConstants.settingsWindowHeight)
+        .frame(width: UIConstants.settingsWindowWidth, height: UIConstants.settingsWindowHeight - 200) // Smaller height
         .background(Color(NSColor.windowBackgroundColor))
         .cornerRadius(UIConstants.windowCornerRadius)
         .shadow(radius: UIConstants.windowShadowRadius)
@@ -140,9 +124,30 @@ struct SettingsView: View {
             )
             .frame(width: UIConstants.ruleEditWidth, height: UIConstants.ruleEditHeight)
         }
-        .task {
-            // Load directories when view appears
-            await loadDirectoriesFromBackend()
+    }
+    
+    // MARK: - Tab Content Views
+    
+    private var foldersTabContent: some View {
+        VStack(alignment: .leading, spacing: UIConstants.settingsGroupSpacing) {
+            Text("Input Folder")
+                .font(.headline)
+            
+            inputFolderSection
+            
+            Text("Output Folder")
+                .font(.headline)
+            
+            outputFolderSection
+        }
+    }
+    
+    private var rulesTabContent: some View {
+        VStack(alignment: .leading, spacing: UIConstants.settingsGroupSpacing) {
+            Text("Organization Rules")
+                .font(.headline)
+            
+            organizationRulesSection
         }
     }
     
@@ -195,7 +200,7 @@ struct SettingsView: View {
     private var organizationRulesSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
-                Text("Customize how files should be organized (map file type to destination)")
+                Text("Customize how files should be organized")
                     .font(.system(size: UIConstants.settingsLabelSize))
                     .foregroundColor(.secondary)
                 
@@ -269,34 +274,6 @@ struct SettingsView: View {
         .padding(.vertical, UIConstants.smallPadding)
     }
     
-    // MARK: - API Methods
-    
-    private func loadDirectoriesFromBackend() async {
-        isLoadingDirectories = true
-        errorMessage = nil
-        
-        do {
-            try await SettingsService.shared.loadDirectoriesFromBackend()
-            
-            // Update UI with values from the backend
-            inputFolderPath = SettingsService.shared.getInputFolder()
-            outputFolderPath = SettingsService.shared.getOutputFolder()
-            
-        } catch let error as APIError {
-            errorMessage = "Error: \(error.localizedDescription)"
-        } catch {
-            errorMessage = "Error: \(error.localizedDescription)"
-        }
-        
-        isLoadingDirectories = false
-    }
-    
-    private func loadDirectoriesFromBackend() {
-        Task {
-            await loadDirectoriesFromBackend()
-        }
-    }
-    
     // MARK: - Helper Methods
     
     private func selectFolderPath(isInput: Bool) {
@@ -319,43 +296,13 @@ struct SettingsView: View {
     }
     
     private func saveSettings() {
-        // Reset status
-        errorMessage = nil
-        saveSuccess = false
-        isSaving = true
-        
-        // Save settings to local storage first
+        // Save settings to local storage
         SettingsService.shared.setInputFolder(inputFolderPath)
         SettingsService.shared.setOutputFolder(outputFolderPath)
         SettingsService.shared.saveOrganizationRules(organizationRules)
         
-        // Save to backend using Task
-        Task {
-            do {
-                _ = try await SettingsService.shared.saveSettingsToBackend()
-                
-                // UI updates must be done on the main thread
-                await MainActor.run {
-                    isSaving = false
-                    saveSuccess = true
-                    
-                    // Auto-hide success message after a delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        saveSuccess = false
-                    }
-                }
-            } catch let error as APIError {
-                await MainActor.run {
-                    isSaving = false
-                    errorMessage = "Error: \(error.localizedDescription)"
-                }
-            } catch {
-                await MainActor.run {
-                    isSaving = false
-                    errorMessage = "Error: \(error.localizedDescription)"
-                }
-            }
-        }
+        // Update Smart File Organizer settings
+        SmartFileOrganizerService.shared.updateSettings()
     }
 }
 

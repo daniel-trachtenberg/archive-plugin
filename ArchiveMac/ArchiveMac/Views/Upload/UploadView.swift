@@ -10,6 +10,18 @@ struct UploadView: View {
     @State private var uploadComplete = false
     @State private var errorMessage: String? = nil
     
+    // Smart File Organizer integration
+    @StateObject private var smartOrganizer = SmartFileOrganizerService.shared
+    @State private var processWithOrganizer = true
+    @State private var processingResults: [ProcessingResult] = []
+    
+    struct ProcessingResult {
+        let fileName: String
+        let success: Bool
+        let destination: String?
+        let error: String?
+    }
+    
     // Keep track of security-scoped bookmarks
     @State private var securityScopedBookmarks: [URL: Data] = [:]
     
@@ -65,9 +77,24 @@ struct UploadView: View {
                 Spacer()
                 
                 if !selectedFiles.isEmpty && !isUploading && !uploadComplete {
+                    // Smart Organizer toggle
+                    HStack {
+                        Toggle("Auto-organize", isOn: $processWithOrganizer)
+                            .toggleStyle(CheckboxToggleStyle())
+                            .font(.caption)
+                            .disabled(!smartOrganizer.isActive)
+                        
+                        if !smartOrganizer.isActive {
+                            Text("(Organizer inactive)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
                     Button("Clear") {
                         selectedFiles = []
                         errorMessage = nil
+                        processingResults = []
                     }
                     .buttonStyle(BorderedButtonStyle())
                     .controlSize(.regular)
@@ -82,6 +109,7 @@ struct UploadView: View {
                         selectedFiles = []
                         uploadComplete = false
                         errorMessage = nil
+                        processingResults = []
                     }
                     .buttonStyle(BorderedProminentButtonStyle())
                     .controlSize(.regular)
@@ -123,6 +151,16 @@ struct UploadView: View {
                     openFileDialog()
                 }
                 .buttonStyle(BorderedProminentButtonStyle())
+                
+                if smartOrganizer.isActive {
+                    Text("Files will be automatically organized")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else {
+                    Text("Smart Organizer is inactive")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         }
         // First try the modern .dropDestination API (macOS 13+)
@@ -198,8 +236,13 @@ struct UploadView: View {
                 .font(.title)
                 .bold()
             
-            Text("Uploading files to Input folder...")
-                .foregroundColor(.gray)
+            if processWithOrganizer && smartOrganizer.isActive {
+                Text("Uploading and organizing files...")
+                    .foregroundColor(.gray)
+            } else {
+                Text("Uploading files to Input folder...")
+                    .foregroundColor(.gray)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -213,10 +256,51 @@ struct UploadView: View {
             Text("Upload Complete!")
                 .font(.system(size: 24))
             
-            Text("\(selectedFiles.count) files have been uploaded to the Input folder")
-                .font(.system(size: 16))
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
+            if processWithOrganizer && smartOrganizer.isActive && !processingResults.isEmpty {
+                VStack(spacing: 8) {
+                    Text("Processing Results:")
+                        .font(.headline)
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(processingResults, id: \.fileName) { result in
+                                HStack {
+                                    Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .foregroundColor(result.success ? .green : .red)
+                                        .font(.caption)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(result.fileName)
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                        
+                                        if let destination = result.destination {
+                                            Text("→ \(destination)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        } else if let error = result.error {
+                                            Text("Error: \(error)")
+                                                .font(.caption2)
+                                                .foregroundColor(.red)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                    .frame(height: 100)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                }
+            } else {
+                Text("\(selectedFiles.count) files have been uploaded to the Input folder")
+                    .font(.system(size: 16))
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -309,6 +393,7 @@ struct UploadView: View {
         
         isUploading = true
         uploadProgress = 0
+        processingResults = []
         
         // Create Input directory if it doesn't exist
         let inputFolderURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!.appendingPathComponent("Input")
@@ -321,6 +406,7 @@ struct UploadView: View {
             // Create task for handling file copying
             Task {
                 var copiedCount = 0
+                var uploadedFiles: [URL] = []
                 
                 // Process each file
                 for fileURL in selectedFiles {
@@ -347,6 +433,7 @@ struct UploadView: View {
                         // Copy the file to the Input folder
                         try FileManager.default.copyItem(at: fileURL, to: destinationURL)
                         copiedCount += 1
+                        uploadedFiles.append(destinationURL)
                         
                         // Update progress
                         await MainActor.run {
@@ -371,6 +458,11 @@ struct UploadView: View {
                     try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                 }
                 
+                // Process files with Smart Organizer if enabled
+                if processWithOrganizer && smartOrganizer.isActive && !uploadedFiles.isEmpty {
+                    await processUploadedFiles(uploadedFiles)
+                }
+                
                 // Update UI when complete
                 await MainActor.run {
                     isUploading = false
@@ -382,6 +474,59 @@ struct UploadView: View {
             isUploading = false
             errorMessage = "Could not create Input folder: \(error.localizedDescription)"
             print("Error creating Input folder: \(error.localizedDescription)")
+        }
+    }
+    
+    private func processUploadedFiles(_ uploadedFiles: [URL]) async {
+        for fileURL in uploadedFiles {
+            let fileName = fileURL.lastPathComponent
+            
+            let success = await smartOrganizer.processFile(fileURL)
+            
+            await MainActor.run {
+                if success {
+                    // Try to determine where the file was moved
+                    let recentOps = smartOrganizer.getRecentOperations()
+                    if let lastOp = recentOps.first(where: { $0.sourceURL.lastPathComponent == fileName }) {
+                        let destination = lastOp.destinationURL.deletingLastPathComponent().lastPathComponent
+                        processingResults.append(ProcessingResult(
+                            fileName: fileName,
+                            success: true,
+                            destination: destination,
+                            error: nil
+                        ))
+                    } else {
+                        processingResults.append(ProcessingResult(
+                            fileName: fileName,
+                            success: true,
+                            destination: "Organized",
+                            error: nil
+                        ))
+                    }
+                } else {
+                    processingResults.append(ProcessingResult(
+                        fileName: fileName,
+                        success: false,
+                        destination: nil,
+                        error: "No matching rule found"
+                    ))
+                }
+            }
+        }
+    }
+}
+
+// Custom checkbox toggle style
+struct CheckboxToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square")
+                .foregroundColor(configuration.isOn ? .blue : .gray)
+                .onTapGesture {
+                    configuration.isOn.toggle()
+                }
+            
+            configuration.label
         }
     }
 }
