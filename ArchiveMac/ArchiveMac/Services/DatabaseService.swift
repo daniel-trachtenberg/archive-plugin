@@ -59,14 +59,14 @@ class DatabaseService: ObservableObject {
     
     // MARK: - Settings Management
     
-    /// Get current app settings (input and output folder paths)
-    func getSettings() -> (inputFolder: String, outputFolder: String) {
+    /// Get current app settings (input and output folder paths, monitoring status)
+    func getSettings() -> (inputFolder: String, outputFolder: String, isFileMonitoringActive: Bool) {
         do {
             let descriptor = FetchDescriptor<AppSettings>()
             let settings = try context.fetch(descriptor).first
             
             if let settings = settings {
-                return (settings.inputFolderPath, settings.outputFolderPath)
+                return (settings.inputFolderPath, settings.outputFolderPath, settings.isFileMonitoringActive)
             } else {
                 return createDefaultSettings()
             }
@@ -76,8 +76,8 @@ class DatabaseService: ObservableObject {
         }
     }
     
-    /// Update app settings with new folder paths
-    func updateSettings(inputFolder: String, outputFolder: String) {
+    /// Update app settings with new folder paths and monitoring status
+    func updateSettings(inputFolder: String, outputFolder: String, isFileMonitoringActive: Bool) {
         do {
             let descriptor = FetchDescriptor<AppSettings>()
             let settings = try context.fetch(descriptor).first
@@ -85,9 +85,10 @@ class DatabaseService: ObservableObject {
             if let existingSettings = settings {
                 existingSettings.inputFolderPath = inputFolder
                 existingSettings.outputFolderPath = outputFolder
+                existingSettings.isFileMonitoringActive = isFileMonitoringActive
                 existingSettings.lastModified = Date()
             } else {
-                let newSettings = AppSettings(inputFolderPath: inputFolder, outputFolderPath: outputFolder)
+                let newSettings = AppSettings(inputFolderPath: inputFolder, outputFolderPath: outputFolder, isFileMonitoringActive: isFileMonitoringActive)
                 context.insert(newSettings)
             }
             
@@ -98,12 +99,13 @@ class DatabaseService: ObservableObject {
     }
     
     /// Create default settings if none exist
-    private func createDefaultSettings() -> (String, String) {
+    private func createDefaultSettings() -> (String, String, Bool) {
         let defaultInputFolder = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!.appendingPathComponent("Input").path
         let defaultOutputFolder = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!.appendingPathComponent("Output").path
+        let defaultMonitoringStatus = true
         
-        updateSettings(inputFolder: defaultInputFolder, outputFolder: defaultOutputFolder)
-        return (defaultInputFolder, defaultOutputFolder)
+        updateSettings(inputFolder: defaultInputFolder, outputFolder: defaultOutputFolder, isFileMonitoringActive: defaultMonitoringStatus)
+        return (defaultInputFolder, defaultOutputFolder, defaultMonitoringStatus)
     }
     
     // MARK: - Organization Rules Management
@@ -269,14 +271,23 @@ extension DatabaseService {
     var outputFolder: String {
         return getSettings().outputFolder
     }
+
+    var isFileMonitoringActive: Bool {
+        return getSettings().isFileMonitoringActive
+    }
     
     func setInputFolder(_ path: String) {
         let currentSettings = getSettings()
-        updateSettings(inputFolder: path, outputFolder: currentSettings.outputFolder)
+        updateSettings(inputFolder: path, outputFolder: currentSettings.outputFolder, isFileMonitoringActive: currentSettings.isFileMonitoringActive)
     }
     
     func setOutputFolder(_ path: String) {
         let currentSettings = getSettings()
-        updateSettings(inputFolder: currentSettings.inputFolder, outputFolder: path)
+        updateSettings(inputFolder: currentSettings.inputFolder, outputFolder: path, isFileMonitoringActive: currentSettings.isFileMonitoringActive)
+    }
+
+    func setIsFileMonitoringActive(_ isActive: Bool) {
+        let currentSettings = getSettings()
+        updateSettings(inputFolder: currentSettings.inputFolder, outputFolder: currentSettings.outputFolder, isFileMonitoringActive: isActive)
     }
 } 

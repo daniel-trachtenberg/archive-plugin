@@ -36,6 +36,18 @@ class SettingsService {
         database.setOutputFolder(path)
     }
     
+    // MARK: - File Monitoring Settings
+    
+    /// Get the current file monitoring active status
+    func getIsFileMonitoringActive() -> Bool {
+        return database.isFileMonitoringActive
+    }
+    
+    /// Set the file monitoring active status
+    func setIsFileMonitoringActive(_ isActive: Bool) {
+        database.setIsFileMonitoringActive(isActive)
+    }
+    
     // MARK: - Organization Rules
     
     /// Get all organization rules

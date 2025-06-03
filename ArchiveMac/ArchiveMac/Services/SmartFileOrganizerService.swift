@@ -24,9 +24,12 @@ class SmartFileOrganizerService: ObservableObject {
     private let fileOperations = FileOperationsService.shared
     private let database = DatabaseService.shared
     
+    private var cancellables = Set<AnyCancellable>() // Added for Combine subscriptions
+    
     private init() {
-        setupFileMonitoring()
-        start() // Always start when initialized
+        setupFileMonitoring() // Sets up the onFileDetected callback
+        setupMonitoringStateObservation() // Sets up reactive observation of monitoring state
+        start() // Attempts to start based on current settings
     }
     
     /// Set up file monitoring callbacks
@@ -36,34 +39,70 @@ class SmartFileOrganizerService: ObservableObject {
             self?.processFile(fileURL)
         }
     }
+
+    /// Sets up observation of the FileMonitoringService's state
+    private func setupMonitoringStateObservation() {
+        fileMonitor.$isMonitoring
+            .receive(on: DispatchQueue.main) // Ensure updates are on the main thread
+            .sink { [weak self] isCurrentlyMonitoringByFileMonitor in
+                guard let self = self else { return }
+                let settings = self.database.getSettings()
+                let newOverallActiveState = isCurrentlyMonitoringByFileMonitor && settings.isFileMonitoringActive
+                
+                if self.isActive != newOverallActiveState {
+                    self.isActive = newOverallActiveState
+                    // Log the change in overall active state
+                    if newOverallActiveState {
+                        print("✅ Smart File Organizer is now active and monitoring input folder: \(settings.inputFolder)")
+                    } else {
+                        if settings.isFileMonitoringActive && !isCurrentlyMonitoringByFileMonitor {
+                            // This case covers if monitoring is enabled but failed to start/stopped unexpectedly
+                            print("⚠️ Smart File Organizer is configured to be active, but file monitoring is not currently running.")
+                        } else if !settings.isFileMonitoringActive {
+                            print("ℹ️ Smart File Organizer is inactive because monitoring is disabled in settings.")
+                        } else {
+                            // General case for becoming inactive, e.g., monitor explicitly stopped
+                            print("ℹ️ Smart File Organizer is now inactive.")
+                        }
+                    }
+                }
+            }
+            .store(in: &cancellables)
+    }
     
-    /// Start the organizer service with current settings
+    /// Start the organizer service based on current settings
     private func start() {
         let settings = database.getSettings()
-        let inputFolder = settings.inputFolder
-        
-        print("📁 Starting Smart File Organizer...")
-        print("📂 Input folder: \(inputFolder)")
-        print("📤 Output folder: \(settings.outputFolder)")
+        print("📁 SmartFileOrganizerService attempting to start...")
+        print("📂 Configured Input folder: \(settings.inputFolder)")
+        print("📤 Configured Output folder: \(settings.outputFolder)")
+        print("⚙️ File Monitoring should be active: \(settings.isFileMonitoringActive)")
         
         // Ensure input folder exists
-        if !FileManager.default.fileExists(atPath: inputFolder) {
+        if !FileManager.default.fileExists(atPath: settings.inputFolder) {
             do {
-                try FileManager.default.createDirectory(atPath: inputFolder, withIntermediateDirectories: true, attributes: nil)
-                print("✅ Created input folder: \(inputFolder)")
+                try FileManager.default.createDirectory(atPath: settings.inputFolder, withIntermediateDirectories: true, attributes: nil)
+                print("✅ Created input folder: \(settings.inputFolder)")
             } catch {
-                print("❌ Failed to create input folder: \(error)")
+                print("❌ Failed to create input folder: \(settings.inputFolder). Error: \(error)")
+                // isActive will be false due to fileMonitor.isMonitoring being false (as it won't start)
                 return
             }
         }
         
-        fileMonitor.startMonitoringFromSettings()
-        
-        DispatchQueue.main.async(qos: .userInitiated) {
-            self.isActive = true
+        if settings.isFileMonitoringActive {
+            // Attempt to start the file monitor. Its state will be observed by setupMonitoringStateObservation.
+            fileMonitor.startMonitoringFromSettings()
+        } else {
+            // If settings say monitoring is off, ensure our state reflects that.
+            // The Combine sink will also handle this if fileMonitor.isMonitoring is false.
+            DispatchQueue.main.async {
+                 if self.isActive { self.isActive = false } // Ensure if it was somehow true
+            }
+            print("ℹ️ File monitoring is disabled by settings. Smart File Organizer will not actively monitor files.")
         }
-        print("✅ Smart File Organizer started successfully")
-        print("👁 Watching for new files in: \(inputFolder)")
+        // Note: self.isActive is now primarily managed by the Combine sink.
+        // The initial state will be set once fileMonitor.$isMonitoring emits its first value.
     }
     
     /// Process a file through the complete organization pipeline
@@ -140,16 +179,33 @@ class SmartFileOrganizerService: ObservableObject {
     
     /// Update organizer settings when configuration changes
     func updateSettings() {
-        print("🔄 Updating file monitoring settings...")
-        fileMonitor.updateMonitoringFromSettings()
+        print("🔄 SmartFileOrganizerService received request to update settings...")
+        let newSettings = database.getSettings()
+
+        if newSettings.isFileMonitoringActive {
+            if !fileMonitor.isMonitoring { // If monitoring is supposed to be active but isn't (e.g., was just enabled)
+                print("⚙️ File monitoring was inactive or path changed, attempting to (re)start based on new settings...")
+                fileMonitor.startMonitoringFromSettings() 
+            } else {
+                // Monitoring is already active, tell FileMonitoringService to check if its path needs updating.
+                print("⚙️ File monitoring is active, requesting FileMonitoringService to update its path if needed.")
+                fileMonitor.updateMonitoringFromSettings()
+            }
+        } else {
+            if fileMonitor.isMonitoring { // If monitoring is active but setting is now disabled
+                print("⚙️ File monitoring was active, but setting is now disabled. Stopping monitoring...")
+                fileMonitor.stopMonitoring()
+            }
+        }
+        // self.isActive is now managed by the Combine sink, reacting to changes in fileMonitor.isMonitoring and settings.
+        // The print statement about "Monitoring active: \(self.isActive)" will be covered by the sink's logging.
+        print("ℹ️ SmartFileOrganizerService finished processing settings update. Current monitoring status will be reflected by reactive updates.")
     }
     
     /// Stop the organizer service
     func stop() {
-        fileMonitor.stopMonitoring()
-        DispatchQueue.main.async(qos: .userInitiated) {
-            self.isActive = false
-        }
-        print("🛑 Smart File Organizer stopped")
+        fileMonitor.stopMonitoring() // This will trigger the Combine sink to update isActive
+        print("🛑 Smart File Organizer explicitly stopped.")
+        // No need to directly set self.isActive = false, Combine sink will handle it.
     }
 } 

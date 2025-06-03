@@ -324,6 +324,19 @@ class FileMonitoringService: ObservableObject {
 extension FileMonitoringService {
     /// Start monitoring using the current input folder from settings
     func startMonitoringFromSettings() {
+        // First, check if global monitoring is enabled
+        guard SettingsService.shared.getIsFileMonitoringActive() else {
+            print("ℹ️ FileMonitoringService: Start requested, but global monitoring is disabled in settings.")
+            // Ensure local state reflects that it's not monitoring
+            if self.isMonitoring {
+                DispatchQueue.main.async(qos: .userInitiated) {
+                    self.isMonitoring = false
+                    self.monitoredFolderPath = nil
+                }
+            }
+            return
+        }
+        
         let inputFolder = SettingsService.shared.getInputFolder()
         
         print("🔍 FileMonitoringService: Starting monitoring from settings")
@@ -339,24 +352,34 @@ extension FileMonitoringService {
     
     /// Update monitoring when settings change
     func updateMonitoringFromSettings() {
+        // Check if global monitoring is enabled first
+        guard SettingsService.shared.getIsFileMonitoringActive() else {
+            print("ℹ️ FileMonitoringService: Update requested, but global monitoring is disabled.")
+            if isMonitoring { // If it was monitoring, stop it
+                print("⚙️ Stopping monitoring because global setting is now disabled.")
+                stopMonitoring()
+            }
+            return
+        }
+        
         let newInputFolder = SettingsService.shared.getInputFolder()
         
         print("🔄 FileMonitoringService: Updating monitoring settings")
         print("📁 New input folder: \(newInputFolder)")
         
-        // Only restart if the path has changed
-        if monitoredFolderPath != newInputFolder {
-            print("📂 Folder path changed, restarting monitoring...")
-            stopMonitoring()
+        // Only restart if the path has changed OR if monitoring was previously off and is now being enabled
+        if monitoredFolderPath != newInputFolder || !isMonitoring {
+            print("📂 Folder path changed or monitoring was re-enabled, restarting monitoring...")
+            stopMonitoring() // Stop current if any, or ensure it's reset if it was off
             
             do {
-                try startMonitoring(folderPath: newInputFolder)
+                try startMonitoring(folderPath: newInputFolder) // This will re-check global setting, but it's fine
                 print("✅ FileMonitoringService: Successfully updated monitoring")
             } catch {
                 print("❌ FileMonitoringService: Failed to update monitoring - \(error.localizedDescription)")
             }
         } else {
-            print("📂 Folder path unchanged, continuing monitoring")
+            print("📂 Folder path unchanged and monitoring already active, continuing monitoring")
         }
     }
 } 

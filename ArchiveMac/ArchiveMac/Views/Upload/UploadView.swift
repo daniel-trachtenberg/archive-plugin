@@ -151,16 +151,6 @@ struct UploadView: View {
                     openFileDialog()
                 }
                 .buttonStyle(BorderedProminentButtonStyle())
-                
-                if smartOrganizer.isActive {
-                    Text("Files will be automatically organized")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else {
-                    Text("Smart Organizer is inactive")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
             }
         }
         // First try the modern .dropDestination API (macOS 13+)

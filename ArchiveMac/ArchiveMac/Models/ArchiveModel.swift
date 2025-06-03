@@ -8,11 +8,13 @@ class AppSettings {
     var inputFolderPath: String
     var outputFolderPath: String
     var lastModified: Date
+    var isFileMonitoringActive: Bool
     
-    init(inputFolderPath: String, outputFolderPath: String) {
+    init(inputFolderPath: String, outputFolderPath: String, isFileMonitoringActive: Bool = true) {
         self.inputFolderPath = inputFolderPath
         self.outputFolderPath = outputFolderPath
         self.lastModified = Date()
+        self.isFileMonitoringActive = isFileMonitoringActive
     }
 }
 

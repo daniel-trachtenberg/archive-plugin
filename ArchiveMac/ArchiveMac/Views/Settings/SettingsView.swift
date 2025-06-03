@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var inputFolderPath: String
     @State private var outputFolderPath: String
     @State private var organizationRules: [OrganizationRule]
+    @State private var isFileMonitoringActive: Bool
     
     // UI state
     @State private var isEditingNewRule: Bool = false
@@ -16,6 +17,7 @@ struct SettingsView: View {
     enum SettingsTab: String, CaseIterable {
         case folders = "Folders"
         case rules = "Rules"
+        case monitoring = "Monitoring"
     }
     
     // Initialize with values from SettingsService
@@ -24,6 +26,7 @@ struct SettingsView: View {
         self._inputFolderPath = State(initialValue: SettingsService.shared.getInputFolder())
         self._outputFolderPath = State(initialValue: SettingsService.shared.getOutputFolder())
         self._organizationRules = State(initialValue: SettingsService.shared.getOrganizationRules())
+        self._isFileMonitoringActive = State(initialValue: SettingsService.shared.getIsFileMonitoringActive())
     }
     
     var body: some View {
@@ -77,6 +80,8 @@ struct SettingsView: View {
                         foldersTabContent
                     case .rules:
                         rulesTabContent
+                    case .monitoring:
+                        monitoringTabContent
                     }
                 }
                 .padding(UIConstants.settingsContentPadding)
@@ -86,10 +91,6 @@ struct SettingsView: View {
             
             // Footer with save button
             HStack {
-                Text("File organizer is running automatically")
-                    .foregroundColor(.green)
-                    .font(.system(size: UIConstants.resultSubtitleSize))
-                
                 Spacer()
                 
                 Button("Save") {
@@ -150,6 +151,27 @@ struct SettingsView: View {
                 .font(.headline)
             
             organizationRulesSection
+        }
+    }
+    
+    private var monitoringTabContent: some View {
+        VStack(alignment: .leading, spacing: UIConstants.settingsGroupSpacing) {
+            Text("Active File Monitoring")
+                .font(.headline)
+            
+            GroupBox {
+                VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
+                    Text("Automatically monitor the input folder for new files and organize them based on your rules.")
+                        .font(.system(size: UIConstants.settingsLabelSize))
+                        .foregroundColor(.secondary)
+                    
+                    Toggle("Enable Active Monitoring", isOn: $isFileMonitoringActive)
+                        .toggleStyle(SwitchToggleStyle())
+                        .padding(.top, UIConstants.smallPadding)
+                }
+                .padding(8)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
     
@@ -301,6 +323,7 @@ struct SettingsView: View {
         // Save settings to database
         SettingsService.shared.setInputFolder(inputFolderPath)
         SettingsService.shared.setOutputFolder(outputFolderPath)
+        SettingsService.shared.setIsFileMonitoringActive(isFileMonitoringActive)
         
         // Save all rules individually
         for rule in organizationRules {
