@@ -24,17 +24,17 @@ class AppSettings {
 class OrganizationRule {
     var id: UUID
     var name: String
-    var ruleDescription: String
+    var keywords: [String]
     var destinationFolder: String
     var textEmbedding: Data?
     var createdAt: Date
     var updatedAt: Date
     var isActive: Bool
     
-    init(name: String, ruleDescription: String, destinationFolder: String) {
+    init(name: String, keywords: [String], destinationFolder: String) {
         self.id = UUID()
         self.name = name
-        self.ruleDescription = ruleDescription
+        self.keywords = keywords
         self.destinationFolder = destinationFolder
         self.textEmbedding = nil
         self.createdAt = Date()
@@ -43,9 +43,9 @@ class OrganizationRule {
     }
     
     /// Update rule properties and set updatedAt timestamp
-    func update(name: String, ruleDescription: String, destinationFolder: String) {
+    func update(name: String, keywords: [String], destinationFolder: String) {
         self.name = name
-        self.ruleDescription = ruleDescription
+        self.keywords = keywords
         self.destinationFolder = destinationFolder
         self.updatedAt = Date()
     }

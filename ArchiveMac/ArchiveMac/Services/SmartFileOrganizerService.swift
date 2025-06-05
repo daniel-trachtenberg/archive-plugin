@@ -35,8 +35,14 @@ class SmartFileOrganizerService: ObservableObject {
     /// Set up file monitoring callbacks
     private func setupFileMonitoring() {
         fileMonitor.onFileDetected = { [weak self] fileURL in
-            print("🔍 File detected: \(fileURL.lastPathComponent)")
-            self?.processFile(fileURL)
+            print("🔔 File detected by monitor: \(fileURL.lastPathComponent)")
+            guard let self = self else { return }
+            
+            // Use the same async method that upload flow uses
+            Task {
+                let success = await self.processFile(fileURL)
+                print(success ? "✅ File monitor processing completed successfully: \(fileURL.lastPathComponent)" : "❌ File monitor processing failed: \(fileURL.lastPathComponent)")
+            }
         }
     }
 
@@ -78,6 +84,22 @@ class SmartFileOrganizerService: ObservableObject {
         print("📤 Configured Output folder: \(settings.outputFolder)")
         print("⚙️ File Monitoring should be active: \(settings.isFileMonitoringActive)")
         
+        // Check if any rules are configured
+        let rules = database.getAllRules()
+        let activeRules = rules.filter { $0.isActive }
+        print("📋 Total organization rules: \(rules.count)")
+        print("✅ Active organization rules: \(activeRules.count)")
+        
+        if activeRules.isEmpty {
+            print("⚠️ WARNING: No active organization rules configured! Files will not be organized.")
+            print("💡 Please add organization rules in Settings > Rules tab")
+        } else {
+            print("📝 Active rules:")
+            for rule in activeRules {
+                print("   - \(rule.name): [\(rule.keywords.joined(separator: ", "))] → \(rule.destinationFolder)")
+            }
+        }
+        
         // Ensure input folder exists
         if !FileManager.default.fileExists(atPath: settings.inputFolder) {
             do {
@@ -103,10 +125,14 @@ class SmartFileOrganizerService: ObservableObject {
         }
         // Note: self.isActive is now primarily managed by the Combine sink.
         // The initial state will be set once fileMonitor.$isMonitoring emits its first value.
+        
+        print("📊 SmartFileOrganizerService initialization completed")
     }
     
     /// Process a file through the complete organization pipeline
     func processFile(_ fileURL: URL) async -> Bool {
+        print("🔄 SmartFileOrganizerService.processFile() called for: \(fileURL.lastPathComponent)")
+        
         await MainActor.run {
             self.isProcessing = true
             self.currentFile = fileURL.lastPathComponent
@@ -128,6 +154,28 @@ class SmartFileOrganizerService: ObservableObject {
     /// Execute the complete file processing pipeline
     private func performFileProcessing(_ fileURL: URL) async -> Bool {
         print("🔄 Processing file: \(fileURL.lastPathComponent)")
+        print("📂 File path: \(fileURL.path)")
+        
+        // Validate file access and properties
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("❌ File does not exist: \(fileURL.path)")
+            return false
+        }
+        
+        guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
+            print("❌ File is not readable: \(fileURL.path)")
+            return false
+        }
+        
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = attributes[.size] as? Int64 ?? 0
+            print("📏 File size: \(fileSize) bytes")
+            print("🔒 File permissions check passed")
+        } catch {
+            print("❌ Could not read file attributes: \(error.localizedDescription)")
+            return false
+        }
         
         do {
             // Step 1: Extract content from file
@@ -145,10 +193,13 @@ class SmartFileOrganizerService: ObservableObject {
             print("✅ Match details for \(fileURL.lastPathComponent): \(matchResult.explanation)")
             
             // Step 3: Move file to destination
-            print("📦 Moving \(fileURL.lastPathComponent) to: \(matchResult.rule.destinationFolder)")
+            let destinationURL = URL(fileURLWithPath: matchResult.rule.destinationFolder).appendingPathComponent(fileURL.lastPathComponent)
+            print("📦 Moving \(fileURL.lastPathComponent) to: \(destinationURL.path)")
+            
             let operationResult = await fileOperations.moveFile(
                 from: fileURL, 
-                to: URL(fileURLWithPath: matchResult.rule.destinationFolder).appendingPathComponent(fileURL.lastPathComponent)
+                to: destinationURL,
+                ruleName: matchResult.rule.name
             )
             
             if operationResult.success {
@@ -162,13 +213,6 @@ class SmartFileOrganizerService: ObservableObject {
         } catch {
             print("❌ Processing error for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             return false
-        }
-    }
-    
-    /// Wrapper for private processFile method to maintain compatibility
-    private func processFile(_ fileURL: URL) {
-        Task {
-            _ = await performFileProcessing(fileURL)
         }
     }
     

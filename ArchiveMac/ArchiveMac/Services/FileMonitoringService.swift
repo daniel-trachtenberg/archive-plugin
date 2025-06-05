@@ -10,9 +10,10 @@ import Combine
  * 
  * Features:
  * - Continuous folder monitoring using DispatchSource
- * - Debouncing to avoid processing files that are still being written
+ * - Immediate processing of newly detected files
  * - Filtering of temporary and system files
  * - Thread-safe operation with proper cleanup
+ * - Only processes newly added files, not existing ones
  */
 
 // MARK: - File Event Types
@@ -59,8 +60,10 @@ class FileMonitoringService: ObservableObject {
     // MARK: - Private Properties
     private var folderMonitor: DispatchSourceFileSystemObject?
     private var monitorQueue = DispatchQueue(label: "com.archivemac.filemonitor", qos: .userInitiated)
-    private var debounceTimers: [String: Timer] = [:]
-    private let debounceInterval: TimeInterval = 2.0 // Wait 2 seconds after file changes
+    
+    // Track existing files to only process new ones
+    private var existingFiles: Set<String> = []
+    private var isInitialScan: Bool = true
     
     // File processing callback
     var onFileDetected: ((URL) -> Void)?
@@ -93,6 +96,9 @@ class FileMonitoringService: ObservableObject {
         guard FileManager.default.isReadableFile(atPath: folderPath) else {
             throw MonitoringError.permissionDenied
         }
+        
+        // Perform initial scan to populate existing files
+        performInitialScan(folderURL: folderURL)
         
         // Create file descriptor for the folder
         let fileDescriptor = open(folderPath, O_EVTONLY)
@@ -131,6 +137,7 @@ class FileMonitoringService: ObservableObject {
         }
         
         print("Started monitoring folder: \(folderPath)")
+        print("Initial scan found \(existingFiles.count) existing files")
     }
     
     /// Stop monitoring the current folder
@@ -138,9 +145,9 @@ class FileMonitoringService: ObservableObject {
         folderMonitor?.cancel()
         folderMonitor = nil
         
-        // Cancel any pending debounce timers
-        debounceTimers.values.forEach { $0.invalidate() }
-        debounceTimers.removeAll()
+        // Reset state
+        existingFiles.removeAll()
+        isInitialScan = true
         
         DispatchQueue.main.async(qos: .userInitiated) {
             self.isMonitoring = false
@@ -165,6 +172,36 @@ class FileMonitoringService: ObservableObject {
     
     // MARK: - Private Methods
     
+    private func performInitialScan(folderURL: URL) {
+        print("📂 FileMonitoringService: Performing initial scan of \(folderURL.path)")
+        
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+            
+            // Populate existing files set with file paths
+            existingFiles = Set(contents.compactMap { fileURL in
+                guard isRegularFile(fileURL), 
+                      !isTemporaryFile(fileURL),
+                      isSupportedFileType(fileURL) else {
+                    return nil
+                }
+                return fileURL.path
+            })
+            
+            print("📄 Initial scan found \(existingFiles.count) eligible files")
+            isInitialScan = false
+            
+        } catch {
+            print("❌ Error during initial scan: \(error.localizedDescription)")
+            existingFiles.removeAll()
+            isInitialScan = false
+        }
+    }
+    
     private func handleFolderEvent(folderURL: URL) {
         print("📂 FileMonitoringService: Folder event detected in \(folderURL.path)")
         
@@ -176,13 +213,32 @@ class FileMonitoringService: ObservableObject {
                 options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
             )
             
-            print("📄 Found \(contents.count) items in folder")
+            // Find eligible files
+            let currentEligibleFiles = Set(contents.compactMap { fileURL -> String? in
+                guard isRegularFile(fileURL),
+                      !isTemporaryFile(fileURL),
+                      isSupportedFileType(fileURL) else {
+                    return nil
+                }
+                return fileURL.path
+            })
             
-            // Process each file
-            for fileURL in contents {
-                print("🔍 Checking file: \(fileURL.lastPathComponent)")
-                processFileIfEligible(fileURL)
+            // Find newly added files (files that weren't in existingFiles)
+            let newFiles = currentEligibleFiles.subtracting(existingFiles)
+            
+            print("📄 Current eligible files: \(currentEligibleFiles.count)")
+            print("📄 Previously tracked files: \(existingFiles.count)")
+            print("🆕 New files detected: \(newFiles.count)")
+            
+            // Process only new files immediately
+            for newFilePath in newFiles {
+                let newFileURL = URL(fileURLWithPath: newFilePath)
+                print("🔍 Processing new file: \(newFileURL.lastPathComponent)")
+                processFileIfEligible(newFileURL)
             }
+            
+            // Update our tracking set
+            existingFiles = currentEligibleFiles
             
         } catch {
             print("❌ Error reading folder contents: \(error.localizedDescription)")
@@ -190,7 +246,6 @@ class FileMonitoringService: ObservableObject {
     }
     
     private func processFileIfEligible(_ fileURL: URL) {
-        let filePath = fileURL.path
         let fileName = fileURL.lastPathComponent
         
         print("🔍 Processing eligibility for: \(fileName)")
@@ -215,50 +270,35 @@ class FileMonitoringService: ObservableObject {
         
         print("✅ File \(fileName) is eligible for processing")
         
-        // Debounce file processing to avoid processing files that are still being written
-        debounceFileProcessing(fileURL)
-    }
-    
-    private func debounceFileProcessing(_ fileURL: URL) {
-        let filePath = fileURL.path
-        let fileName = fileURL.lastPathComponent
-        
-        print("⏱️ Debouncing file processing for: \(fileName)")
-        
-        // Cancel existing timer for this file
-        debounceTimers[filePath]?.invalidate()
-        
-        // Create new timer
-        let timer = Timer.scheduledTimer(withTimeInterval: debounceInterval, repeats: false) { [weak self] _ in
-            print("🚀 Debounce timer fired for: \(fileName)")
-            self?.processFile(fileURL)
-            self?.debounceTimers.removeValue(forKey: filePath)
-        }
-        
-        debounceTimers[filePath] = timer
+        // Process file immediately (no debouncing)
+        processFile(fileURL)
     }
     
     private func processFile(_ fileURL: URL) {
         let fileName = fileURL.lastPathComponent
         print("🔄 FileMonitoringService: Processing file \(fileName)")
         
-        // Verify file still exists and hasn't been modified recently
+        // Verify file still exists
         guard FileManager.default.fileExists(atPath: fileURL.path) else { 
             print("❌ File no longer exists: \(fileName)")
             return 
         }
         
+        // Basic stability check - ensure file isn't being actively written
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
             if let modificationDate = attributes[.modificationDate] as? Date {
                 let timeSinceModification = Date().timeIntervalSince(modificationDate)
+                print("📅 File \(fileName) last modified \(String(format: "%.1f", timeSinceModification)) seconds ago")
                 
-                print("📅 File \(fileName) last modified \(timeSinceModification) seconds ago")
-                
-                // Skip if file was modified very recently (might still be writing)
-                guard timeSinceModification > 1.0 else { 
-                    print("⏭️ File \(fileName) modified too recently, skipping")
-                    return 
+                // Only skip if file was modified in the last 0.1 seconds (very recent)
+                if timeSinceModification < 0.1 {
+                    print("⏭️ File \(fileName) modified too recently, will retry shortly")
+                    // Quick retry after 0.2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.processFile(fileURL)
+                    }
+                    return
                 }
             }
         } catch {
@@ -274,7 +314,7 @@ class FileMonitoringService: ObservableObject {
         
         print("📤 Triggering file processing for: \(fileName)")
         
-        // Trigger file processing
+        // Trigger file processing immediately
         onFileDetected?(fileURL)
         
         print("✅ File processing triggered for: \(fileName)")

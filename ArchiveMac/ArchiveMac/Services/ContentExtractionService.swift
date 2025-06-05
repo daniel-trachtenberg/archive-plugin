@@ -109,22 +109,31 @@ class ContentExtractionService {
     
     /// Extract content from a file asynchronously
     func extractContent(from fileURL: URL) async throws -> ExtractedContent {
+        print("📄 ContentExtractionService: Starting extraction for \(fileURL.lastPathComponent)")
+        
         // Verify file exists and is accessible
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("❌ File not found: \(fileURL.path)")
             throw ContentExtractionError.fileNotFound
         }
         
         // Check file size
         let fileSize = try getFileSize(fileURL)
+        print("📏 File size: \(fileSize) bytes")
         guard fileSize <= maxFileSize else {
+            print("❌ File too large: \(fileSize) bytes (max: \(maxFileSize))")
             throw ContentExtractionError.fileTooLarge
         }
         
         // Determine extraction method
         let fileExtension = fileURL.pathExtension.lowercased()
+        print("📎 File extension: \(fileExtension)")
         guard let extractionMethod = supportedTypes[fileExtension] else {
+            print("❌ Unsupported file type: \(fileExtension)")
             throw ContentExtractionError.unsupportedFileType
         }
+        
+        print("🔧 Using extraction method: \(extractionMethod)")
         
         // Extract content based on file type
         let extractedText: String
@@ -145,6 +154,8 @@ class ContentExtractionService {
         
         // Preprocess and normalize the extracted text
         let processedText = preprocessText(extractedText)
+        
+        print("✅ Extraction completed. Original length: \(extractedText.count), Processed length: \(processedText.count)")
         
         return ExtractedContent(
             fileURL: fileURL,

@@ -224,7 +224,7 @@ struct SettingsView: View {
     private var organizationRulesSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
-                Text("Customize how files should be organized")
+                Text("Define keyword-based rules to automatically organize files")
                     .font(.system(size: UIConstants.settingsLabelSize))
                     .foregroundColor(.secondary)
                 
@@ -269,9 +269,23 @@ struct SettingsView: View {
                 Text(rule.name)
                     .font(.system(size: UIConstants.settingsLabelSize, weight: .medium))
                 
-                Text("\(rule.ruleDescription) → \(rule.destinationFolder)")
-                    .font(.system(size: UIConstants.resultSubtitleSize))
-                    .foregroundColor(.gray)
+                if !rule.keywords.isEmpty {
+                    Text("Keywords: \(rule.keywords.joined(separator: ", "))")
+                        .font(.system(size: UIConstants.resultSubtitleSize))
+                        .foregroundColor(.blue)
+                    
+                    Text("→ \(rule.destinationFolder)")
+                        .font(.system(size: UIConstants.resultSubtitleSize))
+                        .foregroundColor(.gray)
+                } else {
+                    Text("⚠️ No keywords defined")
+                        .font(.system(size: UIConstants.resultSubtitleSize))
+                        .foregroundColor(.orange)
+                    
+                    Text("→ \(rule.destinationFolder)")
+                        .font(.system(size: UIConstants.resultSubtitleSize))
+                        .foregroundColor(.gray)
+                }
             }
             
             Spacer()
@@ -339,7 +353,7 @@ struct SettingsView: View {
 
 struct RuleEditView: View {
     @State private var name: String
-    @State private var ruleDescription: String
+    @State private var keywords: String
     @State private var destinationFolder: String
     @State private var existingRule: OrganizationRule?
     
@@ -348,7 +362,7 @@ struct RuleEditView: View {
     
     init(rule: OrganizationRule?, isPresented: Binding<Bool>, onSave: @escaping (OrganizationRule) -> Void) {
         self._name = State(initialValue: rule?.name ?? "")
-        self._ruleDescription = State(initialValue: rule?.ruleDescription ?? "")
+        self._keywords = State(initialValue: rule?.keywords.joined(separator: ", ") ?? "")
         self._destinationFolder = State(initialValue: rule?.destinationFolder ?? "")
         self._existingRule = State(initialValue: rule)
         self._isPresented = isPresented
@@ -364,12 +378,15 @@ struct RuleEditView: View {
             VStack(alignment: .leading, spacing: UIConstants.settingsItemSpacing) {
                 Text("Rule Name")
                     .fontWeight(.medium)
-                TextField("e.g. Screenshots, Math Homework, Finances", text: $name)
+                TextField("e.g. Math Homework, Tax Documents, Screenshots", text: $name)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
-                Text("File Descriptions")
+                Text("Keywords")
                     .fontWeight(.medium)
-                TextField("e.g. PDFs or images associated with my MATH 101 course", text: $ruleDescription)
+                Text("Enter keywords that identify files for this rule. Use specific terms that appear in filenames or file content.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("e.g. math, calculus, homework, assignment, MATH101", text: $keywords)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
                 Text("Destination Folder")
@@ -398,23 +415,33 @@ struct RuleEditView: View {
                 Spacer()
                 
                 Button("Save") {
-                    if let existingRule = existingRule {
-                        // Update existing rule
-                        existingRule.update(name: name, ruleDescription: ruleDescription, destinationFolder: destinationFolder)
-                        onSave(existingRule)
-                    } else {
-                        // Create new rule
-                        let newRule = OrganizationRule(name: name, ruleDescription: ruleDescription, destinationFolder: destinationFolder)
-                        onSave(newRule)
-                    }
-                    
-                    isPresented = false
+                    saveRule()
                 }
                 .buttonStyle(BorderedProminentButtonStyle())
-                .disabled(name.isEmpty || ruleDescription.isEmpty || destinationFolder.isEmpty)
+                .disabled(name.isEmpty || keywords.isEmpty || destinationFolder.isEmpty)
             }
         }
         .padding()
+    }
+    
+    private func saveRule() {
+        // Parse keywords from comma-separated string
+        let parsedKeywords = keywords
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        
+        if let existingRule = existingRule {
+            // Update existing rule
+            existingRule.update(name: name, keywords: parsedKeywords, destinationFolder: destinationFolder)
+            onSave(existingRule)
+        } else {
+            // Create new rule
+            let newRule = OrganizationRule(name: name, keywords: parsedKeywords, destinationFolder: destinationFolder)
+            onSave(newRule)
+        }
+        
+        isPresented = false
     }
     
     private func selectDestinationFolder() {
