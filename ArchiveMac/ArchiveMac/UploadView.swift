@@ -309,7 +309,7 @@ struct UploadView: View {
             }
             
             // Create task for handling file copying
-            Task {
+            Task(priority: .utility) {
                 var copiedCount = 0
                 
                 // Process each file

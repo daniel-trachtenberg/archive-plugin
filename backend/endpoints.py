@@ -7,6 +7,7 @@ from fastapi import (
 )
 import services.filesystem_service as filesystem
 import services.chroma_service as chroma
+import services.credentials_service as credentials
 import utils
 import os
 from config import settings
@@ -44,6 +45,56 @@ IMAGE_EXTENSIONS = (
 class DirectoryConfig(BaseModel):
     input_dir: str
     archive_dir: str
+
+
+class LLMConfig(BaseModel):
+    provider: str
+    model: str
+    base_url: str = ""
+    api_key: str = ""
+
+
+class LLMConfigResponse(BaseModel):
+    provider: str
+    model: str
+    base_url: str = ""
+    api_key_masked: str = ""
+
+
+class LLMAPIKeyConfig(BaseModel):
+    provider: str
+    api_key: str
+
+
+class LLMAPIKeyResponse(BaseModel):
+    provider: str
+    api_key_masked: str = ""
+
+
+def _mask_api_key(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 7:
+        return f"{value[0]}..."
+    return f"{value[:3]}...{value[-4:]}"
+
+
+def _get_provider_api_key(provider: str) -> str:
+    try:
+        return credentials.get_provider_api_key(provider, settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _set_provider_api_key(provider: str, value: str) -> None:
+    try:
+        credentials.set_provider_api_key(provider, value, settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _sync_active_api_key(provider: str) -> None:
+    settings.LLM_API_KEY = _get_provider_api_key(provider)
 
 
 @router.post("/upload")
@@ -153,43 +204,38 @@ async def get_directories():
 
 
 # Helper function to update .env file
-def update_env_file(input_dir: str, archive_dir: str):
-    """Update the .env file with new directory paths"""
+def update_env_values(values: dict):
+    """Update selected keys in the backend .env file."""
     env_path = os.path.join(os.path.dirname(__file__), ".env")
 
     if not os.path.exists(env_path):
-        # Create .env file if it doesn't exist
         with open(env_path, "w") as f:
-            f.write(f"ARCHIVE_DIR={archive_dir}\n")
-            f.write(f"INPUT_DIR={input_dir}\n")
+            for key, value in values.items():
+                f.write(f"{key}={value}\n")
         return
 
-    # Read existing .env file
     with open(env_path, "r") as f:
         lines = f.readlines()
 
-    # Check for existing entries
-    archive_found = False
-    input_found = False
     new_lines = []
+    found_keys = set()
 
     for line in lines:
-        if line.strip().startswith("ARCHIVE_DIR="):
-            new_lines.append(f"ARCHIVE_DIR={archive_dir}\n")
-            archive_found = True
-        elif line.strip().startswith("INPUT_DIR="):
-            new_lines.append(f"INPUT_DIR={input_dir}\n")
-            input_found = True
-        else:
+        stripped = line.strip()
+        replaced = False
+        for key, value in values.items():
+            if stripped.startswith(f"{key}="):
+                new_lines.append(f"{key}={value}\n")
+                found_keys.add(key)
+                replaced = True
+                break
+        if not replaced:
             new_lines.append(line)
 
-    # Add entries if not found
-    if not archive_found:
-        new_lines.append(f"ARCHIVE_DIR={archive_dir}\n")
-    if not input_found:
-        new_lines.append(f"INPUT_DIR={input_dir}\n")
+    for key, value in values.items():
+        if key not in found_keys:
+            new_lines.append(f"{key}={value}\n")
 
-    # Write updated .env file
     with open(env_path, "w") as f:
         f.writelines(new_lines)
 
@@ -217,7 +263,12 @@ async def update_directories(config: DirectoryConfig):
         Path(settings.CHROMA_DB_DIR).mkdir(parents=True, exist_ok=True)
 
         # Save settings to .env file for persistence
-        update_env_file(str(input_path), str(archive_path))
+        update_env_values(
+            {
+                "ARCHIVE_DIR": str(archive_path),
+                "INPUT_DIR": str(input_path),
+            }
+        )
 
         # Import the restart function here to avoid circular imports
         from main import restart_file_watcher
@@ -230,6 +281,170 @@ async def update_directories(config: DirectoryConfig):
         raise HTTPException(
             status_code=500, detail=f"Failed to update directories: {str(e)}"
         )
+
+
+@router.get("/llm-settings", response_model=LLMConfigResponse)
+async def get_llm_settings():
+    """
+    Get active LLM provider settings (API key returned masked).
+    """
+    try:
+        if credentials.migrate_plaintext_keys(settings):
+            update_env_values({**credentials.provider_api_env_values(settings)})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    provider = (settings.LLM_PROVIDER or "openai").lower()
+    model = settings.LLM_MODEL or "gpt-5.2"
+    base_url = settings.LLM_BASE_URL or ""
+
+    if provider == "ollama":
+        base_url = settings.OLLAMA_BASE_URL or "http://localhost:11434"
+        model = settings.OLLAMA_MODEL or "llama3.2"
+    elif provider == "openai":
+        base_url = base_url or "https://api.openai.com/v1"
+        model = settings.LLM_MODEL or "gpt-5.2"
+    elif provider == "anthropic":
+        base_url = base_url or "https://api.anthropic.com"
+        model = settings.LLM_MODEL or "claude-sonnet-4-6"
+    elif provider == "openai_compatible":
+        base_url = base_url or "http://localhost:1234/v1"
+        model = settings.LLM_MODEL or "gpt-5.2"
+
+    api_key_masked = _mask_api_key(_get_provider_api_key(provider))
+
+    return {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "api_key_masked": api_key_masked,
+    }
+
+
+@router.put("/llm-settings", response_model=LLMConfigResponse)
+async def update_llm_settings(config: LLMConfig):
+    """
+    Update LLM provider settings and persist to .env.
+    """
+    try:
+        provider = (config.provider or "openai").strip().lower()
+        if provider not in {"ollama", "openai", "anthropic", "openai_compatible"}:
+            raise HTTPException(status_code=400, detail="Unsupported provider.")
+
+        model = (config.model or "").strip()
+        if not model:
+            raise HTTPException(status_code=400, detail="Model is required.")
+
+        base_url = (config.base_url or "").strip()
+        api_key = (config.api_key or "").strip()
+
+        if provider == "ollama":
+            if not base_url:
+                base_url = "http://localhost:11434"
+            settings.OLLAMA_BASE_URL = base_url
+            settings.OLLAMA_MODEL = model
+        elif provider == "openai":
+            if not base_url:
+                base_url = "https://api.openai.com/v1"
+        elif provider == "anthropic":
+            if not base_url:
+                base_url = "https://api.anthropic.com"
+        elif provider == "openai_compatible":
+            if not base_url:
+                base_url = "http://localhost:1234/v1"
+
+        settings.LLM_PROVIDER = provider
+        settings.LLM_MODEL = model
+        settings.LLM_BASE_URL = base_url
+
+        # Optional inline key update (used by older clients)
+        if provider != "ollama" and api_key:
+            _set_provider_api_key(provider, api_key)
+
+        _sync_active_api_key(provider)
+
+        update_env_values(
+            {
+                "LLM_PROVIDER": provider,
+                "LLM_MODEL": model,
+                "LLM_BASE_URL": base_url,
+                **credentials.provider_api_env_values(settings),
+                "OLLAMA_BASE_URL": settings.OLLAMA_BASE_URL,
+                "OLLAMA_MODEL": settings.OLLAMA_MODEL,
+            }
+        )
+
+        return {
+            "provider": provider,
+            "model": model,
+            "base_url": base_url,
+            "api_key_masked": _mask_api_key(_get_provider_api_key(provider)),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update LLM settings: {str(e)}"
+        )
+
+
+@router.get("/llm-api-key", response_model=LLMAPIKeyResponse)
+async def get_llm_api_key(provider: str = Query()):
+    try:
+        if credentials.migrate_plaintext_keys(settings):
+            update_env_values({**credentials.provider_api_env_values(settings)})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    provider = (provider or "").strip().lower()
+    if provider not in {"openai", "anthropic", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider.")
+    return {
+        "provider": provider,
+        "api_key_masked": _mask_api_key(_get_provider_api_key(provider)),
+    }
+
+
+@router.put("/llm-api-key", response_model=LLMAPIKeyResponse)
+async def add_or_update_llm_api_key(config: LLMAPIKeyConfig):
+    provider = (config.provider or "").strip().lower()
+    if provider not in {"openai", "anthropic", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider.")
+
+    api_key = (config.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key is required.")
+
+    _set_provider_api_key(provider, api_key)
+    if settings.LLM_PROVIDER == provider:
+        _sync_active_api_key(provider)
+
+    update_env_values(
+        {
+            **credentials.provider_api_env_values(settings),
+        }
+    )
+
+    return {"provider": provider, "api_key_masked": _mask_api_key(api_key)}
+
+
+@router.delete("/llm-api-key", response_model=LLMAPIKeyResponse)
+async def delete_llm_api_key(provider: str = Query()):
+    provider = (provider or "").strip().lower()
+    if provider not in {"openai", "anthropic", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider.")
+
+    _set_provider_api_key(provider, "")
+    if settings.LLM_PROVIDER == provider:
+        _sync_active_api_key(provider)
+
+    update_env_values(
+        {
+            **credentials.provider_api_env_values(settings),
+        }
+    )
+
+    return {"provider": provider, "api_key_masked": ""}
 
 
 @router.post("/reconcile")

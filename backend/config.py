@@ -17,12 +17,24 @@ class Settings:
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))
 
-    # Ollama configuration
+    # LLM provider configuration
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.2")
+    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_COMPATIBLE_API_KEY: str = os.getenv("OPENAI_COMPATIBLE_API_KEY", "")
+    OPENAI_API_KEY_ENC: str = os.getenv("OPENAI_API_KEY_ENC", "")
+    ANTHROPIC_API_KEY_ENC: str = os.getenv("ANTHROPIC_API_KEY_ENC", "")
+    OPENAI_COMPATIBLE_API_KEY_ENC: str = os.getenv("OPENAI_COMPATIBLE_API_KEY_ENC", "")
+
+    # Ollama configuration (used when provider is ollama)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
     # AI Model
-    AI_MODEL: str = "ollama"  # Only using ollama for local LLM
+    AI_MODEL: str = "ollama"
 
     # File system configuration
     # Base directory for archive storage (defaults to Desktop/Archive)

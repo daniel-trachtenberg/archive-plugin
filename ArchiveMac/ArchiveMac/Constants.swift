@@ -12,8 +12,8 @@ enum UIConstants {
     static let uploadDragAreaHeight: CGFloat = 180
     
     // Settings window dimensions
-    static let settingsWindowWidth: CGFloat = 620
-    static let settingsWindowHeight: CGFloat = 420
+    static let settingsWindowWidth: CGFloat = 680
+    static let settingsWindowHeight: CGFloat = 560
     
     // Status bar
     static let statusBarHeight: CGFloat = 34

@@ -66,7 +66,7 @@ struct SearchView: View {
                 .onSubmit {
                     openSelectedOrFirstResult()
                 }
-                .onChange(of: searchText) { newValue in
+                .onChange(of: searchText) { _, newValue in
                     scheduleSearch(for: newValue)
                 }
 
@@ -109,7 +109,7 @@ struct SearchView: View {
         }
         .listStyle(.plain)
         .frame(height: calculateResultsHeight())
-        .onChange(of: results) { newResults in
+        .onChange(of: results) { _, newResults in
             selectedResultId = newResults.first?.id
             updateWindowHeight()
         }
@@ -203,7 +203,7 @@ struct SearchView: View {
 
         isLoading = true
 
-        pendingSearchTask = Task {
+        pendingSearchTask = Task(priority: .utility) {
             try? await Task.sleep(nanoseconds: 220_000_000)
             guard !Task.isCancelled else { return }
 

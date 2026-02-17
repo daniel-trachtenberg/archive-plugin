@@ -9,6 +9,7 @@ import requests
 
 from config import settings
 from services import image_analysis_service
+from services import credentials_service
 
 _PATH_TAG_PATTERN = re.compile(r"<suggestedpath>(.*?)</suggestedpath>", re.IGNORECASE | re.DOTALL)
 _SUMMARY_TAG_PATTERN = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
@@ -139,6 +140,143 @@ def _call_ollama(prompt: str, *, timeout: int = 45, num_predict: int = 160) -> s
         return ""
 
     return (payload.get("response") or "").strip()
+
+
+def _call_openai_compatible(
+    prompt: str,
+    *,
+    timeout: int = 45,
+    num_predict: int = 400,
+    base_url: str = "https://api.openai.com/v1",
+    api_key: str = "",
+) -> str:
+    url = base_url.rstrip("/") + "/chat/completions"
+    model = settings.LLM_MODEL or "gpt-5.2"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": num_predict,
+            },
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logging.error("Failed calling OpenAI-compatible provider: %s", exc)
+        return ""
+
+    if response.status_code != 200:
+        logging.error(
+            "OpenAI-compatible provider returned status %s: %s",
+            response.status_code,
+            response.text,
+        )
+        return ""
+
+    try:
+        payload = response.json()
+        return (
+            payload.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+    except Exception as exc:
+        logging.error("Invalid JSON from OpenAI-compatible provider: %s", exc)
+        return ""
+
+
+def _call_anthropic(prompt: str, *, timeout: int = 45, num_predict: int = 400) -> str:
+    api_key = credentials_service.get_provider_api_key("anthropic", settings)
+    if not api_key:
+        logging.error("Missing ANTHROPIC_API_KEY for Anthropic provider")
+        return ""
+
+    model = settings.LLM_MODEL or "claude-sonnet-4-6"
+    base_url = settings.LLM_BASE_URL or "https://api.anthropic.com"
+    url = base_url.rstrip("/") + "/v1/messages"
+
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": num_predict,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logging.error("Failed calling Anthropic provider: %s", exc)
+        return ""
+
+    if response.status_code != 200:
+        logging.error("Anthropic returned status %s: %s", response.status_code, response.text)
+        return ""
+
+    try:
+        payload = response.json()
+        content = payload.get("content", [])
+        if isinstance(content, list) and content:
+            return content[0].get("text", "").strip()
+        return ""
+    except Exception as exc:
+        logging.error("Invalid JSON from Anthropic provider: %s", exc)
+        return ""
+
+
+def _call_model(prompt: str, *, timeout: int = 45, num_predict: int = 160) -> str:
+    provider = (settings.LLM_PROVIDER or "openai").lower()
+    if provider == "ollama":
+        settings.LLM_API_KEY = ""
+        return _call_ollama(prompt, timeout=timeout, num_predict=num_predict)
+    if provider == "openai":
+        base = settings.LLM_BASE_URL or "https://api.openai.com/v1"
+        api_key = credentials_service.get_provider_api_key("openai", settings)
+        if not api_key:
+            logging.error("Missing OPENAI_API_KEY for OpenAI provider")
+            return ""
+        settings.LLM_API_KEY = api_key
+        return _call_openai_compatible(
+            prompt,
+            timeout=timeout,
+            num_predict=num_predict,
+            base_url=base,
+            api_key=api_key,
+        )
+    if provider == "openai_compatible":
+        base = settings.LLM_BASE_URL or "http://localhost:1234/v1"
+        api_key = credentials_service.get_provider_api_key("openai_compatible", settings)
+        settings.LLM_API_KEY = api_key
+        return _call_openai_compatible(
+            prompt,
+            timeout=timeout,
+            num_predict=num_predict,
+            base_url=base,
+            api_key=api_key,
+        )
+    if provider == "anthropic":
+        settings.LLM_API_KEY = credentials_service.get_provider_api_key("anthropic", settings)
+        if not settings.LLM_API_KEY:
+            logging.error("Missing ANTHROPIC_API_KEY for Anthropic provider")
+            return ""
+        return _call_anthropic(prompt, timeout=timeout, num_predict=num_predict)
+
+    logging.error("Unsupported LLM provider '%s', falling back to ollama", provider)
+    return _call_ollama(prompt, timeout=timeout, num_predict=num_predict)
 
 
 def _clean_model_output(text: str) -> str:
@@ -281,7 +419,7 @@ Return XML only in this format:
 <content>{sampled_content}</content>
 """.strip()
 
-    raw = _call_ollama(prompt, timeout=45, num_predict=180)
+    raw = _call_model(prompt, timeout=45, num_predict=180)
     summary = _extract_summary(raw)
     if summary:
         return summary
@@ -319,7 +457,7 @@ Return XML only:
 <image-analysis>{description}</image-analysis>
 """.strip()
 
-    raw = _call_ollama(prompt, timeout=35, num_predict=140)
+    raw = _call_model(prompt, timeout=35, num_predict=140)
     summary = _extract_summary(raw)
     return summary or description
 
@@ -345,7 +483,7 @@ Constraints:
 <directory-structure>{structure_preview}</directory-structure>
 """.strip()
 
-    raw = _call_ollama(prompt, timeout=45, num_predict=80)
+    raw = _call_model(prompt, timeout=45, num_predict=80)
     extracted = _extract_path_from_response(raw)
     normalized = _normalize_path(extracted)
 

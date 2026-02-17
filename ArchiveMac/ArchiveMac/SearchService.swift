@@ -8,7 +8,7 @@ class SearchService {
     
     // Traditional callback-based method (keep for backward compatibility)
     func search(query: String, completion: @escaping ([SearchResult]) -> Void) {
-        Task {
+        Task(priority: .utility) {
             let results = await searchAsync(query: query)
             DispatchQueue.main.async {
                 completion(results)
