@@ -44,6 +44,8 @@ class SearchWindowManager {
             window?.level = .floating
             window?.titleVisibility = .hidden
             window?.titlebarAppearsTransparent = true
+            window?.animationBehavior = .utilityWindow
+            window?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             
             // Make sure this window is properly configured for key status
             window?.acceptsMouseMovedEvents = true
@@ -57,7 +59,7 @@ class SearchWindowManager {
         if let screenFrame = NSScreen.main?.visibleFrame {
             let windowFrame = NSRect(
                 x: screenFrame.midX - UIConstants.searchWindowWidth / 2,
-                y: screenFrame.midY,
+                y: screenFrame.maxY - UIConstants.searchWindowInitialHeight - 120,
                 width: UIConstants.searchWindowWidth,
                 height: UIConstants.searchWindowInitialHeight
             )

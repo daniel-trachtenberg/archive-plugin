@@ -2,9 +2,9 @@ import SwiftUI
 
 enum UIConstants {
     // Search window dimensions
-    static let searchWindowWidth: CGFloat = 600
-    static let searchWindowInitialHeight: CGFloat = 60
-    static let searchWindowMaxResultsHeight: CGFloat = 300
+    static let searchWindowWidth: CGFloat = 720
+    static let searchWindowInitialHeight: CGFloat = 78
+    static let searchWindowMaxResultsHeight: CGFloat = 360
     
     // Upload window dimensions
     static let uploadWindowWidth: CGFloat = 500
@@ -12,19 +12,19 @@ enum UIConstants {
     static let uploadDragAreaHeight: CGFloat = 180
     
     // Settings window dimensions
-    static let settingsWindowWidth: CGFloat = 600
-    static let settingsWindowHeight: CGFloat = 550
+    static let settingsWindowWidth: CGFloat = 620
+    static let settingsWindowHeight: CGFloat = 420
     
     // Status bar
-    static let statusBarHeight: CGFloat = 36
-    static let statusTextSize: CGFloat = 14
+    static let statusBarHeight: CGFloat = 34
+    static let statusTextSize: CGFloat = 13
     
     // Icon and text sizes
     static let searchIconSize: CGFloat = 18
-    static let searchTextSize: CGFloat = 20
+    static let searchTextSize: CGFloat = 24
     static let clearButtonSize: CGFloat = 16
-    static let resultIconSize: CGFloat = 14
-    static let resultTitleSize: CGFloat = 14
+    static let resultIconSize: CGFloat = 16
+    static let resultTitleSize: CGFloat = 15
     static let resultSubtitleSize: CGFloat = 12
     
     // Upload view text sizes
@@ -43,12 +43,12 @@ enum UIConstants {
     static let settingsValueSize: CGFloat = 14
     
     // Spacing and padding
-    static let standardPadding: CGFloat = 16
+    static let standardPadding: CGFloat = 14
     static let smallPadding: CGFloat = 8
     static let tinyPadding: CGFloat = 4
-    static let resultItemSpacing: CGFloat = 8
-    static let resultItemHeight: CGFloat = 60
-    static let resultGroupVerticalPadding: CGFloat = 8
+    static let resultItemSpacing: CGFloat = 2
+    static let resultItemHeight: CGFloat = 52
+    static let resultGroupVerticalPadding: CGFloat = 6
     
     // Upload view padding and spacing
     static let uploadHeaderPadding: CGFloat = 20
@@ -69,18 +69,14 @@ enum UIConstants {
     static let settingsSectionTopPadding: CGFloat = 12
     static let settingsFooterHeight: CGFloat = 60
     
-    // Rule edit view dimensions
-    static let ruleEditWidth: CGFloat = 500
-    static let ruleEditHeight: CGFloat = 380
-    
     // Progress indicator
     static let progressIndicatorScale: CGFloat = 0.7
     static let progressIndicatorSize: CGFloat = 16
     static let uploadProgressHeight: CGFloat = 8
     
     // Corner radius and shadow
-    static let windowCornerRadius: CGFloat = 10
-    static let windowShadowRadius: CGFloat = 10
+    static let windowCornerRadius: CGFloat = 14
+    static let windowShadowRadius: CGFloat = 22
     static let uploadAreaCornerRadius: CGFloat = 10
     static let uploadBorderWidth: CGFloat = 2
 }

@@ -28,22 +28,23 @@ class SettingsWindowManager {
             
             window = SettingsHostingWindow(
                 contentRect: contentRect,
-                styleMask: [.borderless],
+                styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
             )
             
             window?.isReleasedWhenClosed = false
-            window?.backgroundColor = .clear
-            window?.isOpaque = false
+            window?.backgroundColor = NSColor.windowBackgroundColor
+            window?.isOpaque = true
             window?.hasShadow = true
             window?.level = .normal
-            window?.titleVisibility = .hidden
-            window?.titlebarAppearsTransparent = true
+            window?.title = "Archive Settings"
+            window?.titleVisibility = .visible
+            window?.titlebarAppearsTransparent = false
             
             // Make sure this window is properly configured for key status
             window?.acceptsMouseMovedEvents = true
-            window?.isMovableByWindowBackground = true
+            window?.isMovableByWindowBackground = false
         }
         
         let hostingController = NSHostingController(rootView: settingsView)

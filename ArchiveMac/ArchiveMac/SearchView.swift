@@ -3,217 +3,258 @@ import SwiftUI
 struct SearchView: View {
     @Binding var searchText: String
     @Binding var isSearching: Bool
+
     @FocusState private var isFocused: Bool
     @State private var results: [SearchResult] = []
     @State private var isLoading: Bool = false
-    @State private var hoveredResultId: UUID? = nil
-    
-    // Explicitly define a public initializer
+    @State private var selectedResultId: UUID?
+    @State private var pendingSearchTask: Task<Void, Never>?
+
     init(searchText: Binding<String>, isSearching: Binding<Bool>) {
         self._searchText = searchText
         self._isSearching = isSearching
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
-            // Search bar
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
-                    .font(.system(size: UIConstants.searchIconSize))
-                
-                TextField("Search files...", text: $searchText)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: UIConstants.searchTextSize))
-                    .focused($isFocused)
-                    .onSubmit {
-                        performSearch()
-                    }
-                    .onChange(of: searchText) {
-                        if searchText.isEmpty {
-                            results = []
-                            updateWindowHeight()
-                        }
-                    }
-                
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(UIConstants.progressIndicatorScale)
-                        .frame(width: UIConstants.progressIndicatorSize, height: UIConstants.progressIndicatorSize)
-                } else if !searchText.isEmpty {
-                    Button(action: {
-                        searchText = ""
-                        results = []
-                        updateWindowHeight()
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
-                            .font(.system(size: UIConstants.clearButtonSize))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-            .padding(UIConstants.standardPadding)
-            
-            if !searchText.isEmpty {
-                Divider()
-                
-                // Status message bar (only shows when no results and not empty search)
-                if (isLoading || results.isEmpty) {
-                    statusMessageBar
-                }
-                
-                // Results list (only shows when we have results)
-                if !results.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: UIConstants.resultItemSpacing) {
-                            ForEach(results) { result in
-                                resultRow(for: result)
-                            }
-                        }
-                        .padding(.vertical, UIConstants.resultGroupVerticalPadding)
-                    }
-                    .frame(height: calculateResultsHeight())
-                }
+            searchBar
+
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                hintRow(text: "Type to search your archive")
+            } else if isLoading {
+                hintRow(text: "Searching...")
+            } else if results.isEmpty {
+                hintRow(text: "No matches")
+            } else {
+                resultsList
             }
         }
         .frame(width: UIConstants.searchWindowWidth)
-        .background(Color(NSColor.windowBackgroundColor))
-        .cornerRadius(UIConstants.windowCornerRadius)
-        .shadow(radius: UIConstants.windowShadowRadius)
+        .background(.ultraThinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: UIConstants.windowCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: UIConstants.windowCornerRadius, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: UIConstants.windowShadowRadius, x: 0, y: 12)
+        .onMoveCommand(perform: handleMoveCommand)
+        .onExitCommand {
+            closeSearch()
+        }
         .onAppear {
             isFocused = true
-            
-            // Set callback for window close
             SearchWindowManager.shared.onClose = {
                 isSearching = false
             }
+            updateWindowHeight()
+        }
+        .onDisappear {
+            pendingSearchTask?.cancel()
         }
     }
-    
-    // Helper Views
-    
-    // A dedicated status message bar with vertically centered text
-    private var statusMessageBar: some View {
-        ZStack {
-            // Use a background to ensure proper height
-            Rectangle()
-                .fill(Color.clear)
-                .frame(height: UIConstants.statusBarHeight)
-            
-            // The centered message
-            Text(isLoading ? "Searching..." : "Press Enter to search")
-                .foregroundColor(.gray)
-                .font(.system(size: UIConstants.statusTextSize))
-        }
-    }
-    
-    private func resultRow(for result: SearchResult) -> some View {
-        // Wrap the existing HStack in a ZStack with a background
-        ZStack {
-            // Background that spans full width
-            RoundedRectangle(cornerRadius: UIConstants.tinyPadding)
-                .fill(hoveredResultId == result.id ? Color.gray.opacity(0.1) : Color.clear)
-            
-            // Original content
-            HStack {
-                Image(systemName: result.type.icon)
-                    .foregroundColor(.blue)
-                    .font(.system(size: UIConstants.resultIconSize))
-                
-                VStack(alignment: .leading, spacing: UIConstants.tinyPadding) {
-                    Text(result.name)
-                        .fontWeight(.medium)
-                        .font(.system(size: UIConstants.resultTitleSize))
-                    
-                    Text(result.path)
-                        .font(.system(size: UIConstants.resultSubtitleSize))
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(.system(size: UIConstants.searchIconSize, weight: .semibold))
+
+            TextField("Search files", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: UIConstants.searchTextSize, weight: .regular, design: .default))
+                .focused($isFocused)
+                .onSubmit {
+                    openSelectedOrFirstResult()
                 }
-                
-                Spacer() // Add this to push content to the left
+                .onChange(of: searchText) { newValue in
+                    scheduleSearch(for: newValue)
+                }
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: UIConstants.progressIndicatorSize, height: UIConstants.progressIndicatorSize)
+            } else if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    results = []
+                    selectedResultId = nil
+                    updateWindowHeight()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: UIConstants.clearButtonSize))
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, UIConstants.standardPadding)
-            .padding(.vertical, UIConstants.smallPadding)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var resultsList: some View {
+        List(results, selection: $selectedResultId) { result in
+            resultRow(for: result)
+                .tag(result.id)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10))
+                .listRowBackground(Color.clear)
+        }
+        .listStyle(.plain)
+        .frame(height: calculateResultsHeight())
+        .onChange(of: results) { newResults in
+            selectedResultId = newResults.first?.id
+            updateWindowHeight()
+        }
+    }
+
+    private func hintRow(text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(size: UIConstants.statusTextSize))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(height: UIConstants.statusBarHeight)
+    }
+
+    private func resultRow(for result: SearchResult) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: result.type.icon)
+                .foregroundStyle(.blue)
+                .font(.system(size: UIConstants.resultIconSize, weight: .medium))
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.name)
+                    .font(.system(size: UIConstants.resultTitleSize, weight: .medium))
+                    .lineLimit(1)
+
+                Text(result.path)
+                    .font(.system(size: UIConstants.resultSubtitleSize, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
         .onTapGesture {
             openFile(result)
         }
-        .onHover { isHovered in
-            hoveredResultId = isHovered ? result.id : nil
+    }
+
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        guard !results.isEmpty else { return }
+
+        let currentIndex: Int
+        if let selectedResultId,
+           let index = results.firstIndex(where: { $0.id == selectedResultId }) {
+            currentIndex = index
+        } else {
+            currentIndex = 0
         }
-        .animation(.easeInOut(duration: 0.1), value: hoveredResultId == result.id)
+
+        switch direction {
+        case .down:
+            selectedResultId = results[min(currentIndex + 1, results.count - 1)].id
+        case .up:
+            selectedResultId = results[max(currentIndex - 1, 0)].id
+        default:
+            break
+        }
     }
-    
-    // Helper Methods
-    
-    private func calculateResultsHeight() -> CGFloat {
-        // Height for results list, capped at maximum
-        let contentHeight = CGFloat(results.count) * UIConstants.resultItemHeight + UIConstants.resultGroupVerticalPadding * 2
-        return min(contentHeight, UIConstants.searchWindowMaxResultsHeight)
+
+    private func openSelectedOrFirstResult() {
+        if let selectedResultId,
+           let selected = results.first(where: { $0.id == selectedResultId }) {
+            openFile(selected)
+            return
+        }
+
+        if let first = results.first {
+            openFile(first)
+            return
+        }
+
+        scheduleSearch(for: searchText)
     }
-    
-    private func performSearch() {
-        guard !searchText.isEmpty else {
+
+    private func scheduleSearch(for query: String) {
+        pendingSearchTask?.cancel()
+
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            isLoading = false
             results = []
+            selectedResultId = nil
             updateWindowHeight()
             return
         }
-        
+
         isLoading = true
-        
-        Task {
-            let searchResults = await SearchService.shared.searchAsync(query: searchText)
-            
-            // Update UI on the main thread
+
+        pendingSearchTask = Task {
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled else { return }
+
+            let searchResults = await SearchService.shared.searchAsync(query: trimmed)
+            guard !Task.isCancelled else { return }
+
             await MainActor.run {
-                self.results = searchResults
-                self.isLoading = false
-                self.updateWindowHeight()
+                if self.searchText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+                    self.results = searchResults
+                    self.selectedResultId = searchResults.first?.id
+                    self.isLoading = false
+                    self.updateWindowHeight()
+                }
             }
         }
     }
-    
+
+    private func calculateResultsHeight() -> CGFloat {
+        let contentHeight = CGFloat(results.count) * UIConstants.resultItemHeight + UIConstants.resultGroupVerticalPadding * 2
+        return min(contentHeight, UIConstants.searchWindowMaxResultsHeight)
+    }
+
     private func openFile(_ result: SearchResult) {
         let filePath = "\(result.path)/\(result.name)"
         let url = URL(fileURLWithPath: filePath)
-        
-        // Add file existence check
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-            closeSearch()
-        } else {
-            // Handle the case where the file doesn't exist
-            // You might want to show an alert or some UI feedback here
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
             print("File not found: \(url.path)")
+            return
         }
+
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        closeSearch()
     }
-    
+
     private func updateWindowHeight() {
         DispatchQueue.main.async {
-            // Base height (search bar)
-            let baseHeight: CGFloat = UIConstants.searchWindowInitialHeight
-            
-            // Divider height (if search is not empty)
-            let dividerHeight: CGFloat = !searchText.isEmpty ? 1 : 0
-            
-            // Status bar height (if we're searching or have no results but not empty)
-            let statusBarHeight: CGFloat = (!searchText.isEmpty && (isLoading || results.isEmpty)) ?
-                UIConstants.statusBarHeight : 0
-            
-            // Results height (if we have results)
-            let resultsHeight: CGFloat = (!searchText.isEmpty && !results.isEmpty) ?
-                calculateResultsHeight() : 0
-            
-            // Calculate total height
-            let newHeight = baseHeight + dividerHeight + statusBarHeight + resultsHeight
-            
-            SearchWindowManager.shared.updateHeight(newHeight)
+            let searchBarHeight = UIConstants.searchWindowInitialHeight
+
+            let contentHeight: CGFloat
+            let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || isLoading || results.isEmpty {
+                contentHeight = UIConstants.statusBarHeight
+            } else {
+                contentHeight = calculateResultsHeight()
+            }
+
+            SearchWindowManager.shared.updateHeight(searchBarHeight + contentHeight)
         }
     }
-    
+
     private func closeSearch() {
         SearchWindowManager.shared.hide()
     }

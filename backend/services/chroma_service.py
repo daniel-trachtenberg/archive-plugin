@@ -1,36 +1,96 @@
-import chromadb
-from chromadb.utils.embedding_functions import OpenCLIPEmbeddingFunction
-from chromadb.utils.data_loaders import ImageLoader
-from PIL import Image
-import numpy as np
-import io
-from config import settings
 import logging
+import os
+import shutil
+from datetime import datetime
+import threading
+import numpy as np
+from config import settings
+
+CHROMA_IMPORT_ERROR = None
+
+try:
+    import chromadb
+except Exception as import_error:
+    chromadb = None
+    CHROMA_IMPORT_ERROR = import_error
+    logging.error(
+        "Failed to import chromadb. Ensure compatible versions are installed. Error: %s",
+        import_error,
+    )
+
+
+def _create_client():
+    if chromadb is None:
+        return None
+    return chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
+
 
 # Initialize Chroma Client with local persistence
-chroma_client = chromadb.PersistentClient(
-    path=settings.CHROMA_DB_DIR,
-)
+chroma_client = _create_client()
 
-# For image handling
-embedding_function = OpenCLIPEmbeddingFunction()
-data_loader = ImageLoader()
+recovery_lock = threading.Lock()
+
+
+def _is_schema_mismatch_error(error: Exception) -> bool:
+    message = str(error).lower()
+    # Common failure after upgrading Chroma against an old SQLite schema.
+    return (
+        "no such column: collections.topic" in message
+        or ("no such column" in message and "collections" in message)
+    )
+
+
+def _recover_chroma_storage(error: Exception) -> bool:
+    """
+    Backup incompatible local Chroma DB and create a fresh one.
+    Returns True if recovery succeeded.
+    """
+    if not _is_schema_mismatch_error(error):
+        return False
+
+    with recovery_lock:
+        db_dir = settings.CHROMA_DB_DIR
+        backup_dir = f"{db_dir}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        try:
+            if os.path.exists(db_dir):
+                shutil.move(db_dir, backup_dir)
+                logging.warning(
+                    "Chroma schema mismatch detected. Backed up old DB to: %s",
+                    backup_dir,
+                )
+            os.makedirs(db_dir, exist_ok=True)
+
+            global chroma_client
+            chroma_client = _create_client()
+            logging.warning("Created fresh Chroma DB at: %s", db_dir)
+            return True
+        except Exception as recovery_error:
+            logging.error("Failed to recover Chroma storage: %s", recovery_error)
+            return False
 
 
 def ensure_collection_exists(collection_name: str = "archive"):
     """
-    Ensure a multi-modal collection exists.
+    Ensure the archive collection exists.
     """
-    try:
-        collection = chroma_client.get_or_create_collection(
-            collection_name,
-            embedding_function=embedding_function,
-            data_loader=data_loader,
-        )
-        return collection
-    except Exception as e:
-        logging.error(f"Error creating/getting collection: {e}")
+    if chromadb is None:
+        logging.error("ChromaDB unavailable due to import error: %s", CHROMA_IMPORT_ERROR)
         return None
+
+    if chroma_client is None:
+        logging.error("ChromaDB client was not initialized")
+        return None
+
+    for attempt in range(2):
+        try:
+            collection = chroma_client.get_or_create_collection(collection_name)
+            return collection
+        except Exception as e:
+            logging.error(f"Error creating/getting collection: {e}")
+            if attempt == 0 and _recover_chroma_storage(e):
+                continue
+            return None
 
 
 def add_document_to_collection(
@@ -44,7 +104,7 @@ def add_document_to_collection(
         if collection:
             # Don't print the content - it could be binary data
             logging.debug(f"Adding document to collection: {path}")
-            collection.add(ids=[path], documents=[content])
+            collection.upsert(ids=[path], documents=[content])
             logging.debug(f"Successfully added document: {path}")
             return True
         return False
@@ -53,18 +113,26 @@ def add_document_to_collection(
         return False
 
 
-def add_image_to_collection(path: str, image: bytes, collection_name: str = "archive"):
+def add_image_to_collection(
+    path: str,
+    image: bytes,
+    collection_name: str = "archive",
+    summary: str = "",
+):
     """
     Add an image to the Chroma collection.
     """
     try:
         collection = ensure_collection_exists(collection_name)
         if collection:
-            # Don't print the image content - it's binary data
+            # Store image entries as text summaries for reliable semantic retrieval.
             logging.debug(f"Adding image to collection: {path}")
-            open_image = Image.open(io.BytesIO(image))
-            image_array = np.array(open_image)
-            collection.add(ids=[path], images=[image_array])
+            text_summary = (
+                summary.strip()
+                if summary and summary.strip()
+                else f"Image file at path: {path}"
+            )
+            collection.upsert(ids=[path], documents=[text_summary])
             logging.debug(f"Successfully added image: {path}")
             return True
         return False
@@ -91,10 +159,8 @@ def query_collection(
                 )
                 return results
             elif query_image is not None:
-                results = collection.query(
-                    query_images=[query_image], n_results=n_results
-                )
-                return results
+                # Image queries are not supported in the stable text-only collection path.
+                return {"ids": [[]], "distances": [[]]}
         return {"ids": [[]], "distances": [[]]}
     except Exception as e:
         logging.error(f"Error querying collection: {e}")
@@ -106,7 +172,9 @@ def delete_item(path: str, collection_name: str = "archive"):
     Delete an item from the collection.
     """
     try:
-        collection = chroma_client.get_collection(collection_name)
+        collection = ensure_collection_exists(collection_name)
+        if not collection:
+            return False
         collection.delete(ids=[path])
         return True
     except Exception as e:
@@ -132,14 +200,12 @@ def rename(
             logging.debug(f"Deleted old path: {old_path}")
 
             if is_image:
-                # Don't print the image content - it's binary data
-                open_image = Image.open(io.BytesIO(content))
-                image_array = np.array(open_image)
-                collection.add(ids=[new_path], images=[image_array])
+                image_summary = f"Image file at path: {new_path}"
+                collection.upsert(ids=[new_path], documents=[image_summary])
                 logging.debug(f"Added image with new path: {new_path}")
             else:
                 # Don't print the content - it could be binary data
-                collection.add(ids=[new_path], documents=[content])
+                collection.upsert(ids=[new_path], documents=[content])
                 logging.debug(f"Added document with new path: {new_path}")
             return True
         return False

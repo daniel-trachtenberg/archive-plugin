@@ -28,7 +28,7 @@ class SearchService {
     private func performSearch(query: String, retryCount: Int) async -> [SearchResult] {
         // Create URL with the query parameter
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "http://localhost:8000/query?query_text=\(encodedQuery)&n_results=5") else {
+        guard let url = URL(string: "http://localhost:8000/query?query_text=\(encodedQuery)&n_results=10") else {
             return []
         }
         
@@ -37,7 +37,12 @@ class SearchService {
         request.timeoutInterval = 10.0 // Increase timeout to 10 seconds
         
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                print("Search endpoint returned status: \(http.statusCode)")
+                return []
+            }
             
             guard !data.isEmpty else {
                 print("No data received from search endpoint")
@@ -82,9 +87,9 @@ class SearchService {
         let fileExtension = (path as NSString).pathExtension.lowercased()
         
         switch fileExtension {
-        case "pdf", "doc", "docx":
+        case "pdf", "doc", "docx", "ppt", "pptx":
             return .document
-        case "jpg", "jpeg", "png", "gif", "heic", "wepb":
+        case "jpg", "jpeg", "png", "gif", "heic", "heif", "webp":
             return .image
         case "xls", "xlsx", "csv":
             return .spreadsheet

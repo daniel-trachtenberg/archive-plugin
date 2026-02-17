@@ -11,7 +11,6 @@ import logging
 from datetime import datetime
 import threading
 import requests
-import contextlib
 from contextlib import asynccontextmanager
 import shutil
 import time
@@ -33,6 +32,22 @@ global_event_handler = None
 global_archive_observer = None
 global_archive_event_handler = None
 observer_lock = threading.Lock()
+
+DOCUMENT_EXTENSIONS = (
+    ".pdf",
+    ".txt",
+    ".md",
+    ".rtf",
+    ".ppt",
+    ".pptx",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+)
+
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
 
 
 # Function to restart file watcher with new directory
@@ -258,7 +273,7 @@ class InputDirectoryHandler(FileSystemEventHandler):
 
             # Wait a bit longer to make sure all files are copied into the folder
             # This is especially important for large folders or slow file systems
-            asyncio.run_coroutine_threadsafe(asyncio.sleep(10), self.loop)
+            time.sleep(10)
 
             if not os.path.exists(folder_path):
                 logging.warning(
@@ -336,7 +351,7 @@ class InputDirectoryHandler(FileSystemEventHandler):
             while initial_size != current_size:
                 initial_size = current_size
                 # Wait a bit and check again
-                asyncio.run_coroutine_threadsafe(asyncio.sleep(2), self.loop)
+                time.sleep(2)
                 if os.path.exists(file_path):  # File might be deleted
                     current_size = os.path.getsize(file_path)
                 else:
@@ -370,29 +385,46 @@ class InputDirectoryHandler(FileSystemEventHandler):
                 logging.error(f"Error reading file {file_path}: {str(e)}")
                 return
 
-            # Process based on file type
-            if filename.lower().endswith(
-                (".pdf", ".txt", ".pptx", ".docx", ".doc", ".xlsx", ".xls")
-            ):
-                asyncio.run_coroutine_threadsafe(
+            # Process based on file type and only remove input file on success.
+            process_future = None
+            filename_lower = filename.lower()
+            if filename_lower.endswith(DOCUMENT_EXTENSIONS):
+                process_future = asyncio.run_coroutine_threadsafe(
                     utils.process_document(filename=filename, content=content),
                     self.loop,
                 )
-            elif filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-                asyncio.run_coroutine_threadsafe(
+            elif filename_lower.endswith(IMAGE_EXTENSIONS):
+                process_future = asyncio.run_coroutine_threadsafe(
                     utils.process_image(filename=filename, content=content),
                     self.loop,
                 )
+            else:
+                logging.info(
+                    f"Skipping unsupported file type in input directory: {filename}"
+                )
+                return
 
-            # Delete the original file after processing
-            if os.path.exists(file_path):
+            processed_path = None
+            try:
+                processed_path = process_future.result(timeout=300)
+            except Exception as process_error:
+                logging.error(
+                    f"Processing failed for {filename}: {str(process_error)}"
+                )
+
+            if processed_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                     logging.info(f"Removed original file: {file_path}")
                 except Exception as e:
                     logging.error(f"Error removing file {file_path}: {str(e)}")
+            elif not processed_path:
+                logging.warning(
+                    f"Keeping original file because processing did not complete: {file_path}"
+                )
 
-            logging.info(f"Processed and archived file: {filename}")
+            if processed_path:
+                logging.info(f"Processed and archived file: {filename}")
 
         except Exception as e:
             logging.error(f"Error processing file {file_path}: {str(e)}")

@@ -1,12 +1,12 @@
 import services.filesystem_service as filesystem
 import services.llm_service as llm
 import services.chroma_service as chroma
-from fastapi import HTTPException
 from PyPDF2 import PdfReader
 import base64
 import io
 import os
 import logging
+import json
 from pptx import Presentation
 import shutil
 from config import settings
@@ -331,13 +331,50 @@ def limit_text_for_llm(text, max_chars=8192):
     Returns:
         str: The limited text
     """
-    if not text:
+    if text is None:
         return ""
+
+    if not isinstance(text, str):
+        text = str(text)
 
     if len(text) <= max_chars:
         return text
 
     return text[:max_chars]
+
+
+def directory_structure_for_llm():
+    """
+    Convert the nested filesystem structure to a compact string for prompts.
+    """
+    structure = filesystem.get_directory_structure()
+    try:
+        serialized = json.dumps(structure, separators=(",", ":"))
+    except Exception:
+        serialized = str(structure)
+    return limit_text_for_llm(serialized, max_chars=6000)
+
+
+def _ensure_unique_relative_path(relative_path: str) -> str:
+    """
+    Ensure files are never overwritten in the archive by appending numeric suffixes.
+    """
+    normalized = os.path.normpath(relative_path)
+    full_path = os.path.join(settings.ARCHIVE_DIR, normalized)
+    if not os.path.exists(full_path):
+        return normalized
+
+    parent = os.path.dirname(normalized)
+    stem, ext = os.path.splitext(os.path.basename(normalized))
+
+    counter = 1
+    while True:
+        candidate_name = f"{stem}_{counter}{ext}"
+        candidate = os.path.join(parent, candidate_name) if parent else candidate_name
+        candidate_full = os.path.join(settings.ARCHIVE_DIR, candidate)
+        if not os.path.exists(candidate_full):
+            return candidate
+        counter += 1
 
 
 async def process_document(
@@ -347,7 +384,7 @@ async def process_document(
     try:
         logging.info(f"Processing document: {filename}")
 
-        directory_structure = filesystem.get_directory_structure()
+        directory_structure = directory_structure_for_llm()
 
         if filename.lower().endswith(".pdf"):
             file_content = extract_text_from_pdf(content)
@@ -397,12 +434,12 @@ async def process_document(
                 processed_name = basename.replace("_", " ").replace("-", " ")
                 file_content = f"Excel spreadsheet titled: {processed_name}"
         else:
-            file_content = content.decode("utf-8")
+            file_content = content.decode("utf-8", errors="ignore")
 
         # Limit text size to prevent exceeding LLM context window
         file_content_for_llm = limit_text_for_llm(file_content)
 
-        # Step 1: Generate a 3-sentence summary of the file content
+        # Step 1: Generate semantic summary used for organization and retrieval.
         logging.info(f"Generating summary for: {filename}")
         file_summary = await llm.get_file_summary(
             filename=filename,
@@ -419,47 +456,34 @@ async def process_document(
         )
         logging.info(f"Initial suggested path: {suggested_path}")
 
-        # PowerPoint-specific classification
-        if filename.lower().endswith(".pptx") and (
-            not suggested_path or suggested_path == "General"
-        ):
-            # Special handling for PowerPoint files that didn't get a good classification
-            file_ext = os.path.splitext(filename)[1].lower()
-            basename = os.path.splitext(os.path.basename(filename))[0]
-            topic = basename.replace("_", " ").replace("-", " ").title()
-
-            if topic and topic != "Untitled" and topic != "Presentation":
-                suggested_path = f"Presentations/{topic}"
-            else:
-                suggested_path = "Presentations/General"
-
-            logging.info(f"PowerPoint fallback path: {suggested_path}")
-
         # Sanitize the suggested path to ensure proper file placement
         suggested_path = sanitize_path_suggestion(suggested_path, filename)
 
-        # After sanitizing, check if we need to add the filename
-        if not suggested_path.endswith(filename):
-            suggested_path = os.path.join(suggested_path, filename)
+        # Build final file path and avoid accidental overwrites.
+        suggested_path = os.path.join(suggested_path, filename)
 
-        # Clean up path parts
-        path_parts = suggested_path.split("/")
+        # Clean up duplicate path segments
+        path_parts = suggested_path.replace("\\", "/").split("/")
         corrected_path_parts = [
             path_parts[i]
             for i in range(len(path_parts))
             if i == 0 or path_parts[i] != path_parts[i - 1]
         ]
 
-        logging.info(f"Suggested path: {suggested_path}")
-
-        final_path = "/".join(corrected_path_parts)
-        final_path = os.path.normpath(final_path)
+        final_path = os.path.normpath("/".join(corrected_path_parts))
+        final_path = _ensure_unique_relative_path(final_path)
+        logging.info(f"Final document path: {final_path}")
 
         # Save file to filesystem
         filesystem.save_file(content, final_path)
 
         # Add to vector database
-        chroma.add_document_to_collection(final_path, file_content)
+        embedding_payload = (
+            f"Filename: {filename}\n"
+            f"Summary: {file_summary or 'N/A'}\n"
+            f"Content: {file_content_for_llm}"
+        )
+        chroma.add_document_to_collection(final_path, embedding_payload)
 
         # Log the final path to the terminal
         print(f"Document moved to: {final_path}")
@@ -478,7 +502,7 @@ async def process_image(
     try:
         logging.info(f"Processing image: {filename}")
 
-        directory_structure = filesystem.get_directory_structure()
+        directory_structure = directory_structure_for_llm()
 
         # No need to encode the image for CLIP analysis - we'll use binary content directly
         # The encoded version is still needed for some other potential uses
@@ -494,11 +518,9 @@ async def process_image(
         else:
             media_type = "application/octet-stream"
 
-        # Ensure directory structure is not too large for LLM context
-        limited_dir_structure = limit_text_for_llm(directory_structure)
-
         # Try to get CLIP description directly
         image_summary = ""
+        suggested_path = ""
         try:
             # Get the image summary from the CLIP model and LLM
             image_summary = await llm.get_image_summary(
@@ -515,7 +537,7 @@ async def process_image(
             suggested_path = await llm.get_path_suggestion_for_image(
                 filename=filename,
                 encoded_image=encoded_image,
-                directory_structure=limited_dir_structure,
+                directory_structure=directory_structure,
                 media_type=media_type,
             )
             logging.info(f"Got path suggestion directly: {suggested_path}")
@@ -529,35 +551,37 @@ async def process_image(
             suggested_path = await llm.get_path_from_summary(
                 filename=filename,
                 summary=image_summary,
-                directory_structure=limited_dir_structure,
+                directory_structure=directory_structure,
             )
             logging.info(f"Path suggestion from summary: {suggested_path}")
 
         # Sanitize the suggested path to ensure proper file placement
         suggested_path = sanitize_path_suggestion(suggested_path, filename)
 
-        # After sanitizing, check if we need to add the filename
-        if not suggested_path.endswith(filename):
-            suggested_path = os.path.join(suggested_path, filename)
+        # Build final file path and avoid accidental overwrites.
+        suggested_path = os.path.join(suggested_path, filename)
 
-        # Clean up path parts
-        path_parts = suggested_path.split("/")
+        # Clean up duplicate path segments
+        path_parts = suggested_path.replace("\\", "/").split("/")
         corrected_path_parts = [
             path_parts[i]
             for i in range(len(path_parts))
             if i == 0 or path_parts[i] != path_parts[i - 1]
         ]
 
-        logging.info(f"Suggested path (with image analysis): {suggested_path}")
-
-        final_path = "/".join(corrected_path_parts)
-        final_path = os.path.normpath(final_path)
+        final_path = os.path.normpath("/".join(corrected_path_parts))
+        final_path = _ensure_unique_relative_path(final_path)
+        logging.info(f"Final image path: {final_path}")
 
         # Save file to filesystem
         filesystem.save_file(content, final_path)
 
         # Add to vector database
-        chroma.add_image_to_collection(final_path, content)
+        chroma.add_image_to_collection(
+            final_path,
+            content,
+            summary=f"Filename: {filename}\nSummary: {image_summary or filename}",
+        )
 
         # Log the final path to the terminal
         print(f"Image moved to: {final_path}")
@@ -597,7 +621,7 @@ async def process_folder(
             logging.error(f"Path {folder_path} is not a directory, cannot process")
             return None
 
-        directory_structure = filesystem.get_directory_structure()
+        directory_structure = directory_structure_for_llm()
 
         # Create enhanced content with detailed folder analysis
         folder_content = f"FOLDER ANALYSIS:\n\nFolder name: {folder_name}\n\n"
@@ -983,10 +1007,11 @@ def sanitize_path_suggestion(suggested_path, filename):
     Returns:
         str: A sanitized path that ensures proper file placement
     """
-    logging.info(f"Sanitizing path suggestion: {suggested_path} for file {filename}")
+    raw_path = (suggested_path or "").strip()
+    logging.info(f"Sanitizing path suggestion: {raw_path} for file {filename}")
 
     # First, normalize path separators
-    suggested_path = suggested_path.replace("\\", "/")
+    suggested_path = raw_path.replace("\\", "/")
 
     # Check if the suggested path already ends with the filename
     if suggested_path.endswith(filename):
@@ -1028,24 +1053,31 @@ def sanitize_path_suggestion(suggested_path, filename):
                 logging.info(f"Removed file-like component: {part}")
                 continue
 
+        # Remove characters that are invalid or noisy in folder names.
+        part = "".join(c for c in part if c.isalnum() or c in (" ", "_", "-"))
+        part = part.strip().replace("  ", " ")
+        path_parts[i] = part
         i += 1
 
     # Rebuild the path
-    sanitized_path = "/".join(path_parts)
+    sanitized_parts = [segment for segment in path_parts if segment]
+    sanitized_path = "/".join(sanitized_parts[:3])
 
     # Make sure we don't have an empty path
     if not sanitized_path:
         file_extension = os.path.splitext(filename)[1].lower()
-        if file_extension in [".jpg", ".jpeg", ".png", ".gif"]:
+        if file_extension in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"]:
             sanitized_path = "Images"
-        elif file_extension in [".pdf", ".doc", ".docx", ".txt"]:
+        elif file_extension in [".pdf", ".doc", ".docx", ".txt", ".md", ".rtf"]:
             sanitized_path = "Documents"
+        elif file_extension in [".csv", ".xls", ".xlsx"]:
+            sanitized_path = "Data"
         elif file_extension in [".mp3", ".wav", ".flac"]:
             sanitized_path = "Music"
         elif file_extension in [".mp4", ".mov", ".avi"]:
             sanitized_path = "Videos"
         else:
-            sanitized_path = "General"
+            sanitized_path = "Files"
 
     logging.info(f"Sanitized path: {sanitized_path}")
     return sanitized_path
@@ -1065,7 +1097,7 @@ def extract_text_for_file_type(file_path, content):
         else:
             # Try to decode as text
             try:
-                return content.decode("utf-8")
+                return content.decode("utf-8", errors="ignore")
             except:
                 return f"Binary file: {os.path.basename(file_path)}"
     except Exception as e:

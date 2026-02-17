@@ -4,20 +4,40 @@ from fastapi import (
     UploadFile,
     HTTPException,
     Query,
-    Body,
 )
-from fastapi.responses import FileResponse
 import services.filesystem_service as filesystem
 import services.chroma_service as chroma
 import utils
 import os
-import re
 from config import settings
 from pathlib import Path
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
 router = APIRouter()
+
+DOCUMENT_EXTENSIONS = (
+    ".pdf",
+    ".txt",
+    ".md",
+    ".rtf",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+)
+
+IMAGE_EXTENSIONS = (
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".heic",
+    ".heif",
+)
 
 
 # New model for directory configuration
@@ -34,12 +54,12 @@ async def upload_file(file: UploadFile = File(...)):
     content = await file.read()
     filename_lower = file.filename.lower()
     path = None
-    if filename_lower.endswith((".pdf", ".txt", ".pptx")):
+    if filename_lower.endswith(DOCUMENT_EXTENSIONS):
         path = await utils.process_document(
             filename=file.filename,
             content=content,
         )
-    elif filename_lower.endswith(("jpeg", "jpg", "png", "gif", "webp")):
+    elif filename_lower.endswith(IMAGE_EXTENSIONS):
         path = await utils.process_image(
             filename=file.filename,
             content=content,
@@ -75,10 +95,16 @@ async def query(
         results["ids"][0] if results["ids"] and results["ids"][0] else []
     )
 
-    # Convert to full filesystem paths for easy access
-    full_paths = [
-        os.path.join(settings.ARCHIVE_DIR, path) for path in formatted_results
-    ]
+    # Convert to full filesystem paths for easy access and drop stale entries.
+    full_paths = []
+    seen = set()
+    for relative_path in formatted_results:
+        absolute_path = os.path.join(settings.ARCHIVE_DIR, relative_path)
+        if absolute_path in seen:
+            continue
+        if os.path.exists(absolute_path):
+            full_paths.append(absolute_path)
+            seen.add(absolute_path)
 
     return {"results": full_paths}
 

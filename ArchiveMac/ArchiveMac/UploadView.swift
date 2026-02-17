@@ -19,18 +19,6 @@ struct UploadView: View {
             HStack {
                 Text("Upload Files")
                     .font(.system(size: UIConstants.uploadTitleSize, weight: .medium))
-                
-                Spacer()
-                
-                Button(action: {
-                    isUploadViewShowing = false
-                    UploadWindowManager.shared.hide()
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.gray)
-                        .font(.system(size: UIConstants.uploadCloseButtonSize))
-                }
-                .buttonStyle(PlainButtonStyle())
             }
             .padding(.horizontal, UIConstants.uploadHeaderPadding)
             .padding(.vertical, UIConstants.uploadHeaderVerticalPadding)
@@ -93,8 +81,9 @@ struct UploadView: View {
         }
         .frame(width: UIConstants.uploadWindowWidth, height: UIConstants.uploadWindowHeight)
         .background(Color(NSColor.windowBackgroundColor))
-        .cornerRadius(UIConstants.windowCornerRadius)
-        .shadow(radius: UIConstants.windowShadowRadius)
+        .onDisappear {
+            isUploadViewShowing = false
+        }
     }
     
     // Component Views
@@ -309,9 +298,10 @@ struct UploadView: View {
         
         isUploading = true
         uploadProgress = 0
+        errorMessage = nil
         
-        // Create Input directory if it doesn't exist
-        let inputFolderURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!.appendingPathComponent("Input")
+        // Use the configured Input directory from settings/backend.
+        let inputFolderURL = URL(fileURLWithPath: SettingsService.shared.getInputFolder(), isDirectory: true)
         
         do {
             if !FileManager.default.fileExists(atPath: inputFolderURL.path) {
@@ -324,10 +314,11 @@ struct UploadView: View {
                 
                 // Process each file
                 for fileURL in selectedFiles {
-                    let destinationURL = inputFolderURL.appendingPathComponent(fileURL.lastPathComponent)
+                    let destinationURL = uniqueDestinationURL(for: fileURL, in: inputFolderURL)
                     
                     // Access the file using security-scoped bookmark if available
                     var didStartAccessing = false
+                    var accessedURL = fileURL
                     if let bookmarkData = securityScopedBookmarks[fileURL] {
                         do {
                             var isStale = false
@@ -335,6 +326,7 @@ struct UploadView: View {
                                                      options: .withSecurityScope, 
                                                      relativeTo: nil, 
                                                      bookmarkDataIsStale: &isStale)
+                            accessedURL = resolvedURL
                             didStartAccessing = resolvedURL.startAccessingSecurityScopedResource()
                         } catch {
                             print("Error resolving bookmark: \(error.localizedDescription)")
@@ -364,7 +356,7 @@ struct UploadView: View {
                     
                     // Stop accessing if we started
                     if didStartAccessing {
-                        fileURL.stopAccessingSecurityScopedResource()
+                        accessedURL.stopAccessingSecurityScopedResource()
                     }
                     
                     // Add a small delay to show progress animation
@@ -383,5 +375,26 @@ struct UploadView: View {
             errorMessage = "Could not create Input folder: \(error.localizedDescription)"
             print("Error creating Input folder: \(error.localizedDescription)")
         }
+    }
+    
+    private func uniqueDestinationURL(for sourceURL: URL, in directoryURL: URL) -> URL {
+        let fileManager = FileManager.default
+        var destinationURL = directoryURL.appendingPathComponent(sourceURL.lastPathComponent)
+        
+        guard fileManager.fileExists(atPath: destinationURL.path) else {
+            return destinationURL
+        }
+        
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = sourceURL.pathExtension
+        var suffix = 1
+        
+        while fileManager.fileExists(atPath: destinationURL.path) {
+            let candidate = ext.isEmpty ? "\(baseName)_\(suffix)" : "\(baseName)_\(suffix).\(ext)"
+            destinationURL = directoryURL.appendingPathComponent(candidate)
+            suffix += 1
+        }
+        
+        return destinationURL
     }
 }
