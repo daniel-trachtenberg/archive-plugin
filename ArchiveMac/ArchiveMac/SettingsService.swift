@@ -47,6 +47,23 @@ struct LLMAPIKeyResponse: Codable {
     var api_key_masked: String
 }
 
+struct MoveLogEntry: Codable, Identifiable {
+    var id: Int
+    var created_at: String
+    var source_path: String
+    var destination_path: String
+    var item_type: String
+    var trigger: String
+    var status: String
+    var note: String?
+}
+
+struct MoveLogsResponse: Codable {
+    var timeframe_hours: Int
+    var total: Int
+    var logs: [MoveLogEntry]
+}
+
 enum APIError: Error {
     case invalidURL
     case networkError(Error)
@@ -329,6 +346,21 @@ final class SettingsService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             return try decode(LLMAPIKeyResponse.self, data: data, response: response)
+        } catch let error as APIError {
+            throw error
+        } catch {
+            throw APIError.networkError(error)
+        }
+    }
+
+    func fetchMoveLogsFromAPI(hours: Int, limit: Int = 200) async throws -> MoveLogsResponse {
+        guard let url = URL(string: "\(baseURL)/move-logs?hours=\(hours)&limit=\(limit)") else {
+            throw APIError.invalidURL
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            return try decode(MoveLogsResponse.self, data: data, response: response)
         } catch let error as APIError {
             throw error
         } catch {

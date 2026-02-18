@@ -63,6 +63,28 @@ private enum CloudVendor: String, CaseIterable, Identifiable {
     var title: String { self == .openai ? "OpenAI" : "Anthropic" }
 }
 
+private enum MoveLogsTimeframe: Int, CaseIterable, Identifiable {
+    case oneHour = 1
+    case oneDay = 24
+    case sevenDays = 168
+    case thirtyDays = 720
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .oneHour:
+            return "1h"
+        case .oneDay:
+            return "24h"
+        case .sevenDays:
+            return "7d"
+        case .thirtyDays:
+            return "30d"
+        }
+    }
+}
+
 struct SettingsView: View {
     @Binding var isSettingsViewShowing: Bool
 
@@ -90,6 +112,10 @@ struct SettingsView: View {
     @State private var isLoadingSettings: Bool = false
     @State private var isCheckingForUpdates: Bool = false
     @State private var updateStatusMessage: String? = nil
+    @State private var moveLogsTimeframe: MoveLogsTimeframe = .oneDay
+    @State private var moveLogs: [MoveLogEntry] = []
+    @State private var isLoadingMoveLogs: Bool = false
+    @State private var moveLogsErrorMessage: String? = nil
     private let providerModeOptions: [ProviderMode] = [.cloud, .local]
 
     private let customModelToken = "__custom_model__"
@@ -231,6 +257,50 @@ struct SettingsView: View {
                     shortcutEditorRows
                 }
 
+                Section("Move Logs") {
+                    HStack(spacing: 10) {
+                        Picker("Timeframe", selection: $moveLogsTimeframe) {
+                            ForEach(MoveLogsTimeframe.allCases) { timeframe in
+                                Text(timeframe.title).tag(timeframe)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if isLoadingMoveLogs {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button("Refresh") {
+                                loadMoveLogs()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    if let moveLogsErrorMessage {
+                        Text(moveLogsErrorMessage)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+
+                    if moveLogs.isEmpty && !isLoadingMoveLogs {
+                        Text("No file movements in the selected timeframe.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(moveLogs) { entry in
+                                    moveLogRow(entry)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .frame(minHeight: 140, maxHeight: 220)
+                    }
+                }
+
                 Section("About") {
                     LabeledContent("Version") {
                         Text(UpdateService.shared.versionDisplayString)
@@ -269,6 +339,7 @@ struct SettingsView: View {
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             loadSettingsFromBackend()
+            loadMoveLogs()
         }
         .onDisappear {
             isSettingsViewShowing = false
@@ -299,6 +370,9 @@ struct SettingsView: View {
             if providerMode == .cloud && newValue != customModelToken {
                 llmModel = newValue
             }
+        }
+        .onChange(of: moveLogsTimeframe) { _, _ in
+            loadMoveLogs()
         }
     }
 
@@ -433,6 +507,65 @@ struct SettingsView: View {
         let prefix = String(value.prefix(3))
         let suffix = String(value.suffix(4))
         return "\(prefix)...\(suffix)"
+    }
+
+    private func moveLogRow(_ entry: MoveLogEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(formattedMoveLogTimestamp(entry.created_at))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(entry.item_type.capitalized)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(entry.status.capitalized)
+                    .font(.caption2)
+                    .foregroundColor(entry.status.lowercased() == "success" ? .green : .red)
+            }
+
+            HStack(alignment: .top, spacing: 6) {
+                Text(compactPath(entry.source_path))
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "arrow.right")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(compactPath(entry.destination_path))
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            if let note = entry.note, !note.isEmpty {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(8)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func compactPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "—" : trimmed
+    }
+
+    private func formattedMoveLogTimestamp(_ value: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        if let date = parser.date(from: value) {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            formatter.timeStyle = .medium
+            return formatter.string(from: date)
+        }
+        return value
     }
 
     private func loadSettingsFromBackend() {
@@ -614,6 +747,36 @@ struct SettingsView: View {
                 await MainActor.run {
                     isUpdatingAPIKey = false
                     errorMessage = "Error: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func loadMoveLogs() {
+        isLoadingMoveLogs = true
+        moveLogsErrorMessage = nil
+        let timeframe = moveLogsTimeframe
+
+        Task(priority: .utility) {
+            do {
+                let response = try await SettingsService.shared.fetchMoveLogsFromAPI(
+                    hours: timeframe.rawValue
+                )
+                await MainActor.run {
+                    moveLogs = response.logs
+                    isLoadingMoveLogs = false
+                }
+            } catch let error as APIError {
+                await MainActor.run {
+                    isLoadingMoveLogs = false
+                    moveLogsErrorMessage = "Error: \(error.localizedDescription)"
+                    moveLogs = []
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingMoveLogs = false
+                    moveLogsErrorMessage = "Error: \(error.localizedDescription)"
+                    moveLogs = []
                 }
             }
         }

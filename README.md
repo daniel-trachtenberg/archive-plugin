@@ -13,6 +13,7 @@ It watches an input folder, embeds and categorizes files, stores searchable vect
 - Secure API key storage (encrypted and/or Keychain-backed)
 - First-run onboarding flow
 - Customizable keyboard shortcuts
+- Time-filtered move logs for debugging
 - In-app version display and update checks
 
 ## Repository structure

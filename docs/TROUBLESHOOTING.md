@@ -79,6 +79,16 @@ Checks:
 - Confirm backend log shows watcher startup.
 - Update directories in Settings to force watcher restart.
 
+## Review file-move history
+
+Use Settings > Move Logs to inspect plugin move activity by timeframe (`1h`, `24h`, `7d`, `30d`).
+
+You can also query the backend directly:
+
+```bash
+curl "http://localhost:8000/move-logs?hours=24&limit=200"
+```
+
 ## Reset local environment
 
 From repository root:

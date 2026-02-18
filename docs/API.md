@@ -210,6 +210,36 @@ Response:
 }
 ```
 
+### `GET /move-logs`
+
+Get recent plugin file-movement logs for debugging.
+
+Query params:
+
+- `hours` (optional, default `24`, max `8760`)
+- `limit` (optional, default `200`, max `1000`)
+
+Response:
+
+```json
+{
+  "timeframe_hours": 24,
+  "total": 2,
+  "logs": [
+    {
+      "id": 18,
+      "created_at": "2026-02-18T20:41:26Z",
+      "source_path": "/Users/me/Desktop/Input/invoice.pdf",
+      "destination_path": "/Users/me/Desktop/Archive/Finance/invoice.pdf",
+      "item_type": "file",
+      "trigger": "input_watcher",
+      "status": "success",
+      "note": ""
+    }
+  ]
+}
+```
+
 ### `GET /health`
 
 Basic backend health check.

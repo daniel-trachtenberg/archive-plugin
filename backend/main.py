@@ -390,12 +390,20 @@ class InputDirectoryHandler(FileSystemEventHandler):
             filename_lower = filename.lower()
             if filename_lower.endswith(DOCUMENT_EXTENSIONS):
                 process_future = asyncio.run_coroutine_threadsafe(
-                    utils.process_document(filename=filename, content=content),
+                    utils.process_document(
+                        filename=filename,
+                        content=content,
+                        source_path=file_path,
+                    ),
                     self.loop,
                 )
             elif filename_lower.endswith(IMAGE_EXTENSIONS):
                 process_future = asyncio.run_coroutine_threadsafe(
-                    utils.process_image(filename=filename, content=content),
+                    utils.process_image(
+                        filename=filename,
+                        content=content,
+                        source_path=file_path,
+                    ),
                     self.loop,
                 )
             else:

@@ -8,6 +8,7 @@ from fastapi import (
 import services.filesystem_service as filesystem
 import services.chroma_service as chroma
 import services.credentials_service as credentials
+import services.move_log_service as move_logs
 import utils
 import os
 from config import settings
@@ -71,6 +72,23 @@ class LLMAPIKeyResponse(BaseModel):
     api_key_masked: str = ""
 
 
+class MoveLogEntry(BaseModel):
+    id: int
+    created_at: str
+    source_path: str
+    destination_path: str
+    item_type: str
+    trigger: str
+    status: str
+    note: str = ""
+
+
+class MoveLogResponse(BaseModel):
+    timeframe_hours: int
+    total: int
+    logs: list[MoveLogEntry]
+
+
 def _mask_api_key(value: str) -> str:
     if not value:
         return ""
@@ -109,11 +127,13 @@ async def upload_file(file: UploadFile = File(...)):
         path = await utils.process_document(
             filename=file.filename,
             content=content,
+            source_path=f"manual-upload:{file.filename}",
         )
     elif filename_lower.endswith(IMAGE_EXTENSIONS):
         path = await utils.process_image(
             filename=file.filename,
             content=content,
+            source_path=f"manual-upload:{file.filename}",
         )
     else:
         raise HTTPException(
@@ -445,6 +465,21 @@ async def delete_llm_api_key(provider: str = Query()):
     )
 
     return {"provider": provider, "api_key_masked": ""}
+
+
+@router.get("/move-logs", response_model=MoveLogResponse)
+async def get_move_logs(
+    hours: int = Query(24, ge=1, le=24 * 365),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """
+    Return recent plugin move logs for debugging.
+    """
+    try:
+        logs = move_logs.list_move_logs(hours=hours, limit=limit)
+        return {"timeframe_hours": hours, "total": len(logs), "logs": logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch move logs: {str(e)}")
 
 
 @router.post("/reconcile")

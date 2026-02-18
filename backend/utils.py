@@ -1,6 +1,7 @@
 import services.filesystem_service as filesystem
 import services.llm_service as llm
 import services.chroma_service as chroma
+import services.move_log_service as move_logs
 from PyPDF2 import PdfReader
 import base64
 import io
@@ -377,9 +378,18 @@ def _ensure_unique_relative_path(relative_path: str) -> str:
         counter += 1
 
 
+def _move_trigger_for_source(source_path: str) -> str:
+    if source_path.startswith("manual-upload:"):
+        return "manual_upload"
+    if source_path:
+        return "input_watcher"
+    return "plugin"
+
+
 async def process_document(
     filename: str,
     content: bytes,
+    source_path: str = "",
 ):
     try:
         logging.info(f"Processing document: {filename}")
@@ -475,7 +485,8 @@ async def process_document(
         logging.info(f"Final document path: {final_path}")
 
         # Save file to filesystem
-        filesystem.save_file(content, final_path)
+        if not filesystem.save_file(content, final_path):
+            raise RuntimeError("Failed to save document to archive filesystem.")
 
         # Add to vector database
         embedding_payload = (
@@ -488,16 +499,34 @@ async def process_document(
         # Log the final path to the terminal
         print(f"Document moved to: {final_path}")
 
+        destination_path = os.path.join(settings.ARCHIVE_DIR, final_path)
+        move_logs.record_move(
+            source_path=source_path or filename,
+            destination_path=destination_path,
+            item_type="file",
+            trigger=_move_trigger_for_source(source_path),
+            status="success",
+        )
+
         logging.info(f"Successfully processed: {filename}")
         return final_path
     except Exception as e:
         logging.error(f"Error processing: {filename}. Error: {str(e)}")
+        move_logs.record_move(
+            source_path=source_path or filename,
+            destination_path="",
+            item_type="file",
+            trigger=_move_trigger_for_source(source_path),
+            status="failed",
+            note=str(e)[:500],
+        )
         return None
 
 
 async def process_image(
     filename: str,
     content: bytes,
+    source_path: str = "",
 ):
     try:
         logging.info(f"Processing image: {filename}")
@@ -574,7 +603,8 @@ async def process_image(
         logging.info(f"Final image path: {final_path}")
 
         # Save file to filesystem
-        filesystem.save_file(content, final_path)
+        if not filesystem.save_file(content, final_path):
+            raise RuntimeError("Failed to save image to archive filesystem.")
 
         # Add to vector database
         chroma.add_image_to_collection(
@@ -586,10 +616,27 @@ async def process_image(
         # Log the final path to the terminal
         print(f"Image moved to: {final_path}")
 
+        destination_path = os.path.join(settings.ARCHIVE_DIR, final_path)
+        move_logs.record_move(
+            source_path=source_path or filename,
+            destination_path=destination_path,
+            item_type="file",
+            trigger=_move_trigger_for_source(source_path),
+            status="success",
+        )
+
         logging.info(f"Successfully processed: {filename}")
         return final_path
     except Exception as e:
         logging.error(f"Error processing: {filename}. Error: {str(e)}")
+        move_logs.record_move(
+            source_path=source_path or filename,
+            destination_path="",
+            item_type="file",
+            trigger=_move_trigger_for_source(source_path),
+            status="failed",
+            note=str(e)[:500],
+        )
         return None
 
 
@@ -959,6 +1006,31 @@ async def process_folder(
 
             print(f"Found {len(files_to_process)} files to add to the database")
 
+            # Persist per-file move logs for this folder ingestion.
+            move_entries = []
+            for rel_path in files_to_process:
+                destination_file = os.path.join(settings.ARCHIVE_DIR, rel_path)
+                relative_inside_folder = os.path.relpath(destination_file, dest_path)
+                source_candidate = os.path.normpath(
+                    os.path.join(source_path, relative_inside_folder)
+                )
+
+                move_entries.append(
+                    {
+                        "source_path": (
+                            source_candidate if os.path.exists(source_candidate) else source_path
+                        ),
+                        "destination_path": destination_file,
+                        "item_type": "file",
+                        "trigger": "input_watcher",
+                        "status": "success",
+                        "note": f"folder:{folder_name}",
+                    }
+                )
+
+            if move_entries:
+                move_logs.record_moves(move_entries)
+
             # Process each file and add it to ChromaDB
             for file_path in files_to_process:
                 try:
@@ -984,10 +1056,27 @@ async def process_folder(
         except Exception as e:
             logging.error(f"Error updating database after folder processing: {str(e)}")
 
+        move_logs.record_move(
+            source_path=source_path,
+            destination_path=dest_path,
+            item_type="folder",
+            trigger="input_watcher",
+            status="success",
+            note=f"files:{len(files_to_process) if 'files_to_process' in locals() else 0}",
+        )
+
         logging.info(f"Successfully processed folder: {folder_name}")
         return final_path
     except Exception as e:
         logging.error(f"Error processing folder: {folder_name}. Error: {str(e)}")
+        move_logs.record_move(
+            source_path=folder_path,
+            destination_path="",
+            item_type="folder",
+            trigger="input_watcher",
+            status="failed",
+            note=str(e)[:500],
+        )
         return None
 
 

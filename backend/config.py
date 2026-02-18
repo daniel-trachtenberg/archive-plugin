@@ -54,5 +54,14 @@ class Settings:
     )
     Path(CHROMA_DB_DIR).mkdir(parents=True, exist_ok=True)
 
+    # Move log storage
+    MOVE_LOG_DB_PATH: str = os.path.expanduser(
+        os.getenv(
+            "MOVE_LOG_DB_PATH",
+            os.path.join(USER_HOME, ".archive-plugin", "move_logs.db"),
+        )
+    )
+    Path(os.path.dirname(MOVE_LOG_DB_PATH)).mkdir(parents=True, exist_ok=True)
+
 
 settings = Settings()
