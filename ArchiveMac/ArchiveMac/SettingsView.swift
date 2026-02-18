@@ -78,6 +78,9 @@ struct SettingsView: View {
     @State private var llmAPIKey: String
     @State private var maskedAPIKey: String
     @State private var isUpdatingAPIKey: Bool = false
+    @State private var searchShortcut: ShortcutDefinition
+    @State private var uploadShortcut: ShortcutDefinition
+    @State private var settingsShortcut: ShortcutDefinition
 
     @State private var selectedModelOption: String = ""
 
@@ -115,6 +118,9 @@ struct SettingsView: View {
         self._llmBaseURL = State(initialValue: SettingsService.shared.getLLMBaseURL())
         self._llmAPIKey = State(initialValue: "")
         self._maskedAPIKey = State(initialValue: SettingsService.shared.getStoredMaskedAPIKey(for: storedProvider))
+        self._searchShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .search))
+        self._uploadShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .upload))
+        self._settingsShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .settings))
 
         self._providerMode = State(initialValue: storedProvider == .ollama ? .local : .cloud)
         self._cloudVendor = State(initialValue: storedProvider == .anthropic ? .anthropic : .openai)
@@ -130,9 +136,6 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-
             Form {
                 Section("Folders") {
                     folderRow(title: "Input", path: $inputFolderPath, isInput: true)
@@ -221,6 +224,10 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Section("Shortcuts") {
+                    shortcutEditorRows
+                }
             }
             .formStyle(.grouped)
 
@@ -264,19 +271,6 @@ struct SettingsView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Settings")
-                .font(.system(size: 20, weight: .semibold))
-            Text("Simple setup for folders and model")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, UIConstants.settingsHeaderPadding)
-        .padding(.vertical, 12)
-    }
-
     private var footer: some View {
         HStack {
             if let errorMessage {
@@ -305,6 +299,29 @@ struct SettingsView: View {
         }
         .padding(.horizontal, UIConstants.settingsHeaderPadding)
         .padding(.vertical, 10)
+    }
+
+    private var shortcutEditorRows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ShortcutEditorRow(
+                title: ShortcutAction.search.title,
+                subtitle: ShortcutAction.search.subtitle,
+                shortcut: $searchShortcut
+            )
+
+            ShortcutEditorRow(
+                title: ShortcutAction.upload.title,
+                subtitle: ShortcutAction.upload.subtitle,
+                shortcut: $uploadShortcut
+            )
+
+            ShortcutEditorRow(
+                title: ShortcutAction.settings.title,
+                subtitle: ShortcutAction.settings.subtitle,
+                shortcut: $settingsShortcut
+            )
+        }
+        .padding(.vertical, 2)
     }
 
     private func folderRow(title: String, path: Binding<String>, isInput: Bool) -> some View {
@@ -402,6 +419,9 @@ struct SettingsView: View {
                     llmBaseURL = SettingsService.shared.getLLMBaseURL()
                     llmAPIKey = ""
                     maskedAPIKey = SettingsService.shared.getStoredMaskedAPIKey(for: llmProvider)
+                    searchShortcut = SettingsService.shared.getShortcut(for: .search)
+                    uploadShortcut = SettingsService.shared.getShortcut(for: .upload)
+                    settingsShortcut = SettingsService.shared.getShortcut(for: .settings)
 
                     if llmProvider == .ollama {
                         providerMode = .local
@@ -469,6 +489,11 @@ struct SettingsView: View {
         }
         llmBaseURL = normalizedBaseURL
         SettingsService.shared.setLLMBaseURL(normalizedBaseURL)
+        SettingsService.shared.setShortcuts(
+            search: searchShortcut,
+            upload: uploadShortcut,
+            settings: settingsShortcut
+        )
 
         Task(priority: .utility) {
             do {

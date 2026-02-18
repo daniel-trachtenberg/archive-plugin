@@ -1,52 +1,117 @@
 import SwiftUI
 import HotKey
 
+private final class HotkeyBridge: ObservableObject {
+    @Published var searchKeyboardShortcut: KeyboardShortcut
+    @Published var uploadKeyboardShortcut: KeyboardShortcut
+    @Published var settingsKeyboardShortcut: KeyboardShortcut
+
+    @Published var searchSignal: Int = 0
+    @Published var uploadSignal: Int = 0
+
+    private var searchHotkey: HotKey?
+    private var uploadHotkey: HotKey?
+    private var shortcutsObserver: NSObjectProtocol?
+
+    init() {
+        searchKeyboardShortcut = SettingsService.shared.getShortcut(for: .search).keyboardShortcut
+        uploadKeyboardShortcut = SettingsService.shared.getShortcut(for: .upload).keyboardShortcut
+        settingsKeyboardShortcut = SettingsService.shared.getShortcut(for: .settings).keyboardShortcut
+
+        reloadShortcutsAndHotkeys()
+
+        shortcutsObserver = NotificationCenter.default.addObserver(
+            forName: .archiveShortcutsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadShortcutsAndHotkeys()
+        }
+    }
+
+    deinit {
+        if let shortcutsObserver {
+            NotificationCenter.default.removeObserver(shortcutsObserver)
+        }
+    }
+
+    private func reloadShortcutsAndHotkeys() {
+        let searchShortcut = SettingsService.shared.getShortcut(for: .search)
+        let uploadShortcut = SettingsService.shared.getShortcut(for: .upload)
+        let settingsShortcut = SettingsService.shared.getShortcut(for: .settings)
+
+        searchKeyboardShortcut = searchShortcut.keyboardShortcut
+        uploadKeyboardShortcut = uploadShortcut.keyboardShortcut
+        settingsKeyboardShortcut = settingsShortcut.keyboardShortcut
+
+        configureGlobalHotKeys(searchShortcut: searchShortcut, uploadShortcut: uploadShortcut)
+    }
+
+    private func configureGlobalHotKeys(searchShortcut: ShortcutDefinition, uploadShortcut: ShortcutDefinition) {
+        searchHotkey = searchShortcut.makeHotKey()
+        searchHotkey?.keyDownHandler = { [weak self] in
+            DispatchQueue.main.async {
+                self?.searchSignal += 1
+            }
+        }
+
+        uploadHotkey = uploadShortcut.makeHotKey()
+        uploadHotkey?.keyDownHandler = { [weak self] in
+            DispatchQueue.main.async {
+                self?.uploadSignal += 1
+            }
+        }
+    }
+}
+
 @main
 struct ArchiveMacApp: App {
+    @StateObject private var hotkeyBridge = HotkeyBridge()
+
     @State private var searchText: String = ""
     @State private var isSearching: Bool = false
     @State private var isUploadViewShowing: Bool = false
     @State private var isSettingsViewShowing: Bool = false
-    
-    // Define keyboard shortcuts
-    private let searchKeyboardShortcut = KeyboardShortcut(.space, modifiers: [.option])
-    private let uploadKeyboardShortcut = KeyboardShortcut("u", modifiers: [.option])
-    private let settingsKeyboardShortcut = KeyboardShortcut(",", modifiers: [.command])
-    
-    // Define hotkeys
-    private let searchHotkey = HotKey(key: .space, modifiers: [.option])
-    private let uploadHotkey = HotKey(key: .u, modifiers: [.option])
-    
+
+    private static var hasScheduledOnboarding = false
+
     // Menu constants
     private let menuWidth: CGFloat = 150
     private let menuPadding: CGFloat = 8
-    
+
+    init() {
+        if !Self.hasScheduledOnboarding, !SettingsService.shared.hasCompletedOnboarding() {
+            Self.hasScheduledOnboarding = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                let onboardingView = OnboardingView()
+                OnboardingWindowManager.shared.show(with: onboardingView)
+            }
+        }
+    }
+
     var body: some Scene {
-        // Menu bar extra
         MenuBarExtra {
             VStack {
                 Button("Search Files", action: searchFiles)
-                .keyboardShortcut(searchKeyboardShortcut)
-                .onAppear {
-                    searchHotkey.keyDownHandler = searchFiles
-                }
-                
+                    .keyboardShortcut(hotkeyBridge.searchKeyboardShortcut)
+
                 Button("Upload Files", action: uploadFiles)
-                .keyboardShortcut(uploadKeyboardShortcut)
-                .onAppear {
-                    uploadHotkey.keyDownHandler = uploadFiles
-                }
-                
+                    .keyboardShortcut(hotkeyBridge.uploadKeyboardShortcut)
+
                 Divider()
-                
-                Button("Settings...") {
+
+                Button("Settings") {
                     isSettingsViewShowing = true
                     showSettingsWindow()
                 }
-                .keyboardShortcut(settingsKeyboardShortcut)
-                
+                .keyboardShortcut(hotkeyBridge.settingsKeyboardShortcut)
+
+                Button("Onboarding") {
+                    showOnboardingWindow()
+                }
+
                 Divider()
-                
+
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
@@ -57,65 +122,66 @@ struct ArchiveMacApp: App {
         } label: {
             Image(systemName: "archivebox")
         }
-        
-        // Watch for search activation
         .onChange(of: isSearching) {
             if isSearching {
                 showSearchWindow()
             }
         }
-        
-        // Watch for upload activation
         .onChange(of: isUploadViewShowing) {
             if isUploadViewShowing {
                 showUploadWindow()
             }
         }
-        
-        // Watch for settings activation
         .onChange(of: isSettingsViewShowing) {
             if isSettingsViewShowing {
                 showSettingsWindow()
             }
         }
+        .onChange(of: hotkeyBridge.searchSignal) { _, _ in
+            searchFiles()
+        }
+        .onChange(of: hotkeyBridge.uploadSignal) { _, _ in
+            uploadFiles()
+        }
     }
-    
-    // MARK: Button action functions
-    
-    func searchFiles() {
+
+    private func searchFiles() {
         isSearching = true
         showSearchWindow()
     }
-    
-    func uploadFiles() {
+
+    private func uploadFiles() {
         isUploadViewShowing = true
         showUploadWindow()
     }
-    
-    // MARK: Show window functions
-    
-    func showSearchWindow() {
+
+    private func showSearchWindow() {
         let searchView = SearchView(
             searchText: $searchText,
             isSearching: $isSearching
         )
-        
+
         SearchWindowManager.shared.show(with: searchView)
     }
-    
-    func showUploadWindow() {
+
+    private func showUploadWindow() {
         let uploadView = UploadView(
             isUploadViewShowing: $isUploadViewShowing
         )
-        
+
         UploadWindowManager.shared.show(with: uploadView)
     }
-    
-    func showSettingsWindow() {
+
+    private func showSettingsWindow() {
         let settingsView = SettingsView(
             isSettingsViewShowing: $isSettingsViewShowing
         )
-        
+
         SettingsWindowManager.shared.show(with: settingsView)
+    }
+
+    private func showOnboardingWindow() {
+        let onboardingView = OnboardingView()
+        OnboardingWindowManager.shared.show(with: onboardingView)
     }
 }

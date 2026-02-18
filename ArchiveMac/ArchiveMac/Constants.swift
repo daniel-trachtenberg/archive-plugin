@@ -14,6 +14,10 @@ enum UIConstants {
     // Settings window dimensions
     static let settingsWindowWidth: CGFloat = 680
     static let settingsWindowHeight: CGFloat = 560
+
+    // Onboarding window dimensions
+    static let onboardingWindowWidth: CGFloat = 760
+    static let onboardingWindowHeight: CGFloat = 600
     
     // Status bar
     static let statusBarHeight: CGFloat = 34

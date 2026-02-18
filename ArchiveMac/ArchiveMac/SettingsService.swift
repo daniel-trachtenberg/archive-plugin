@@ -78,11 +78,16 @@ final class SettingsService {
 
     private let baseURL = "http://localhost:8000"
 
+    private let didRunAPIKeyStorageResetMigrationKey = "didRunAPIKeyStorageResetMigration"
     private let inputFolderKey = "inputFolder"
     private let outputFolderKey = "outputFolder"
     private let llmProviderKey = "llmProvider"
     private let llmModelKey = "llmModel"
     private let llmBaseURLKey = "llmBaseURL"
+    private let onboardingCompletedKey = "onboardingCompleted"
+    private let searchShortcutKey = "searchShortcut"
+    private let uploadShortcutKey = "uploadShortcut"
+    private let settingsShortcutKey = "settingsShortcut"
 
     private let openAIAPIKeyKey = "openaiAPIKey"
     private let anthropicAPIKeyKey = "anthropicAPIKey"
@@ -105,14 +110,7 @@ final class SettingsService {
         .path
 
     private init() {
-        UserDefaults.standard.removeObject(forKey: "organizationRules")
-        UserDefaults.standard.removeObject(forKey: "llmApiKey")
-        UserDefaults.standard.removeObject(forKey: openAIAPIKeyKey)
-        UserDefaults.standard.removeObject(forKey: anthropicAPIKeyKey)
-        UserDefaults.standard.removeObject(forKey: openAICompatibleAPIKeyKey)
-        UserDefaults.standard.removeObject(forKey: openAIMaskedAPIKeyKey)
-        UserDefaults.standard.removeObject(forKey: anthropicMaskedAPIKeyKey)
-        UserDefaults.standard.removeObject(forKey: openAICompatibleMaskedAPIKeyKey)
+        runMigrationsIfNeeded()
     }
 
     // MARK: - Helpers
@@ -151,6 +149,34 @@ final class SettingsService {
         case .anthropic: return anthropicMaskedAPIKeyKey
         case .openai_compatible: return openAICompatibleMaskedAPIKeyKey
         case .ollama: return ""
+        }
+    }
+
+    private func runMigrationsIfNeeded() {
+        let defaults = UserDefaults.standard
+
+        defaults.removeObject(forKey: "organizationRules")
+        defaults.removeObject(forKey: "llmApiKey")
+
+        if !defaults.bool(forKey: didRunAPIKeyStorageResetMigrationKey) {
+            defaults.removeObject(forKey: openAIAPIKeyKey)
+            defaults.removeObject(forKey: anthropicAPIKeyKey)
+            defaults.removeObject(forKey: openAICompatibleAPIKeyKey)
+            defaults.removeObject(forKey: openAIMaskedAPIKeyKey)
+            defaults.removeObject(forKey: anthropicMaskedAPIKeyKey)
+            defaults.removeObject(forKey: openAICompatibleMaskedAPIKeyKey)
+            defaults.set(true, forKey: didRunAPIKeyStorageResetMigrationKey)
+        }
+    }
+
+    private func shortcutStorageKey(for action: ShortcutAction) -> String {
+        switch action {
+        case .search:
+            return searchShortcutKey
+        case .upload:
+            return uploadShortcutKey
+        case .settings:
+            return settingsShortcutKey
         }
     }
 
@@ -375,6 +401,51 @@ final class SettingsService {
         let key = providerMaskedAPIKeyStorageKey(provider)
         guard !key.isEmpty else { return }
         UserDefaults.standard.set(value, forKey: key)
+    }
+
+    func hasCompletedOnboarding() -> Bool {
+        UserDefaults.standard.bool(forKey: onboardingCompletedKey)
+    }
+
+    func setOnboardingCompleted(_ completed: Bool) {
+        UserDefaults.standard.set(completed, forKey: onboardingCompletedKey)
+    }
+
+    func getShortcut(for action: ShortcutAction) -> ShortcutDefinition {
+        let storageKey = shortcutStorageKey(for: action)
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let decoded = try? JSONDecoder().decode(ShortcutDefinition.self, from: data) else {
+            return action.defaultShortcut
+        }
+
+        var normalized = decoded
+        normalized.normalize()
+        return normalized
+    }
+
+    func setShortcut(_ shortcut: ShortcutDefinition, for action: ShortcutAction, notify: Bool = true) {
+        let storageKey = shortcutStorageKey(for: action)
+        var normalized = shortcut
+        normalized.normalize()
+
+        if let encoded = try? JSONEncoder().encode(normalized) {
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
+
+        if notify {
+            NotificationCenter.default.post(name: .archiveShortcutsDidChange, object: nil)
+        }
+    }
+
+    func setShortcuts(
+        search: ShortcutDefinition,
+        upload: ShortcutDefinition,
+        settings: ShortcutDefinition
+    ) {
+        setShortcut(search, for: .search, notify: false)
+        setShortcut(upload, for: .upload, notify: false)
+        setShortcut(settings, for: .settings, notify: false)
+        NotificationCenter.default.post(name: .archiveShortcutsDidChange, object: nil)
     }
 
     // Backward-compatible wrappers for currently-selected provider
