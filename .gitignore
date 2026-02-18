@@ -5,3 +5,12 @@ xcuserdata/
 .DS_Store
 .venv
 .cursor/
+
+# Local environment/secrets
+.env
+**/.env
+!**/.env.example
+
+# Local runtime artifacts
+backend/.chromadb/
+backend/*.db

@@ -1,3 +1,5 @@
+[![archive-banner.png](https://i.postimg.cc/NfrkTK7Q/archive-banner.png)](https://postimg.cc/YhMFBqsP)
+
 # Archive Plugin
 
 Archive Plugin is a macOS menu bar app plus local Python backend for AI-powered file organization and semantic search.
