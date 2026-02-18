@@ -37,12 +37,10 @@ class Settings:
     AI_MODEL: str = "ollama"
 
     # File system configuration
-    # Base directory for archive storage (defaults to Desktop/Archive)
+    # Defaults: input = ~/Downloads, archive = ~/Desktop
     USER_HOME = os.path.expanduser("~")
-    ARCHIVE_DIR: str = os.getenv(
-        "ARCHIVE_DIR", os.path.join(USER_HOME, "Desktop", "Archive")
-    )
-    INPUT_DIR: str = os.getenv("INPUT_DIR", os.path.join(USER_HOME, "Desktop", "Input"))
+    ARCHIVE_DIR: str = os.getenv("ARCHIVE_DIR", os.path.join(USER_HOME, "Desktop"))
+    INPUT_DIR: str = os.getenv("INPUT_DIR", os.path.join(USER_HOME, "Downloads"))
 
     # Create directories if they don't exist
     Path(ARCHIVE_DIR).mkdir(parents=True, exist_ok=True)

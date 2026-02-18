@@ -115,15 +115,13 @@ final class SettingsService {
     private let openAICompatibleMaskedAPIKeyKey = "openaiCompatibleMaskedAPIKey"
 
     private let defaultInputFolder = FileManager.default
-        .urls(for: .desktopDirectory, in: .userDomainMask)
+        .urls(for: .downloadsDirectory, in: .userDomainMask)
         .first!
-        .appendingPathComponent("Input")
         .path
 
     private let defaultOutputFolder = FileManager.default
         .urls(for: .desktopDirectory, in: .userDomainMask)
         .first!
-        .appendingPathComponent("Archive")
         .path
 
     private init() {
