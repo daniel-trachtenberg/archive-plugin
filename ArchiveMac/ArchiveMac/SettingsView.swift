@@ -88,6 +88,8 @@ struct SettingsView: View {
     @State private var saveSuccess: Bool = false
     @State private var errorMessage: String? = nil
     @State private var isLoadingSettings: Bool = false
+    @State private var isCheckingForUpdates: Bool = false
+    @State private var updateStatusMessage: String? = nil
     private let providerModeOptions: [ProviderMode] = [.cloud, .local]
 
     private let customModelToken = "__custom_model__"
@@ -227,6 +229,35 @@ struct SettingsView: View {
 
                 Section("Shortcuts") {
                     shortcutEditorRows
+                }
+
+                Section("About") {
+                    LabeledContent("Version") {
+                        Text(UpdateService.shared.versionDisplayString)
+                            .foregroundColor(.secondary)
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    HStack(spacing: 8) {
+                        if let updateStatusMessage {
+                            Text(updateStatusMessage)
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+
+                        Spacer()
+
+                        if isCheckingForUpdates {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button("Check for Updates") {
+                                checkForUpdates()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -583,6 +614,47 @@ struct SettingsView: View {
                 await MainActor.run {
                     isUpdatingAPIKey = false
                     errorMessage = "Error: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func checkForUpdates() {
+        guard !isCheckingForUpdates else {
+            return
+        }
+
+        isCheckingForUpdates = true
+        updateStatusMessage = nil
+
+        Task(priority: .utility) {
+            do {
+                let result = try await UpdateService.shared.checkForUpdates()
+                await MainActor.run {
+                    isCheckingForUpdates = false
+                    if result.isUpdateAvailable {
+                        updateStatusMessage = "Update available: \(result.latestVersion)"
+                    } else {
+                        updateStatusMessage = "Up to date"
+                    }
+                    UpdateService.shared.presentResultAlert(result, source: "Archive")
+                }
+            } catch {
+                await MainActor.run {
+                    isCheckingForUpdates = false
+                    if let updateError = error as? UpdateServiceError {
+                        switch updateError {
+                        case .noPublishedVersion:
+                            updateStatusMessage = "No published release yet"
+                        case .rateLimited:
+                            updateStatusMessage = "Rate limited, try again later"
+                        default:
+                            updateStatusMessage = "Update check failed"
+                        }
+                    } else {
+                        updateStatusMessage = "Update check failed"
+                    }
+                    UpdateService.shared.presentErrorAlert(error)
                 }
             }
         }

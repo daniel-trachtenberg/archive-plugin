@@ -72,6 +72,7 @@ struct ArchiveMacApp: App {
     @State private var isSearching: Bool = false
     @State private var isUploadViewShowing: Bool = false
     @State private var isSettingsViewShowing: Bool = false
+    @State private var isCheckingForUpdates: Bool = false
 
     private static var hasScheduledOnboarding = false
 
@@ -109,6 +110,11 @@ struct ArchiveMacApp: App {
                 Button("Onboarding") {
                     showOnboardingWindow()
                 }
+
+                Button(isCheckingForUpdates ? "Checking for Updates..." : "Check for Updates") {
+                    checkForUpdatesFromMenu()
+                }
+                .disabled(isCheckingForUpdates)
 
                 Divider()
 
@@ -183,5 +189,28 @@ struct ArchiveMacApp: App {
     private func showOnboardingWindow() {
         let onboardingView = OnboardingView()
         OnboardingWindowManager.shared.show(with: onboardingView)
+    }
+
+    private func checkForUpdatesFromMenu() {
+        guard !isCheckingForUpdates else {
+            return
+        }
+
+        isCheckingForUpdates = true
+
+        Task(priority: .utility) {
+            do {
+                let result = try await UpdateService.shared.checkForUpdates()
+                await MainActor.run {
+                    isCheckingForUpdates = false
+                    UpdateService.shared.presentResultAlert(result)
+                }
+            } catch {
+                await MainActor.run {
+                    isCheckingForUpdates = false
+                    UpdateService.shared.presentErrorAlert(error)
+                }
+            }
+        }
     }
 }
