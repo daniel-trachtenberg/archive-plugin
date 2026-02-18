@@ -1,100 +1,128 @@
-[![archive-banner.png](https://i.postimg.cc/NfrkTK7Q/archive-banner.png)](https://postimg.cc/YhMFBqsP)
+# Archive Plugin
 
-# /Archive
+Archive Plugin is a macOS menu bar app plus local Python backend for AI-powered file organization and semantic search.
 
-/Archive is a macOS plugin that automatically categorizes and organizes your files using AI. It provides intelligent file sorting and context-based search, making it easy to find your files when you need them.
+It watches an input folder, embeds and categorizes files, stores searchable vectors in ChromaDB, and helps you find files quickly from a Spotlight-style search window.
 
-## Overview
+## Product scope
 
-/Archive watches your designated input folders (like Downloads) and automatically sorts files into appropriate categories in your output folder (like Desktop). When you download a new document, image, or spreadsheet, /Archive analyzes it and moves it to the right place in your file system.
+- Automatic file organization into your archive directory
+- Semantic search across archived files
+- Drag-and-drop/manual upload flow
+- Cloud and local LLM support
+- Secure API key storage (encrypted and/or Keychain-backed)
+- First-run onboarding flow
+- Customizable keyboard shortcuts
+- In-app version display and update checks
 
-For example:
+## Repository structure
 
-- A financial statement PDF gets sorted to `Finance/Statements`
-- Family photos go to `Photos/Family`
-- Work presentations go to `Work/Presentations`
+- `ArchiveMac/` macOS SwiftUI app
+- `backend/` FastAPI backend, file watchers, ChromaDB integration
+- `docs/` project documentation
 
-All of this happens automatically, keeping your files organized without manual effort.
+## Supported file types
 
-## Supported File Types
+- Documents: `.pdf`, `.txt`, `.md`, `.rtf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`, `.csv`
+- Images: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.heic`, `.heif`
 
-/Archive currently supports the following file types:
+## Quick start
 
-### Documents
+1. Clone repository.
 
-- PDF (.pdf)
-- Word documents (.doc, .docx)
-- Text files (.txt, .md, .rtf)
+```bash
+git clone https://github.com/daniel-trachtenberg/archive-plugin.git
+cd archive-plugin
+```
 
-### Presentations
+2. Set up backend.
 
-- PowerPoint (.pptx)
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
 
-### Spreadsheets
+3. Run the macOS app.
 
-- Excel (.xls, .xlsx)
-- CSV (.csv)
+```bash
+cd ../ArchiveMac
+open ArchiveMac.xcodeproj
+```
 
-### Images
+Build and run `ArchiveMac` from Xcode.
 
-- JPEG (.jpg, .jpeg)
-- PNG (.png)
-- GIF (.gif)
-- WEBP (.webp)
-- HEIC (.heic)
+## First launch and onboarding
 
-## Getting Started
+On first launch, onboarding walks users through:
 
-### Prerequisites
+- What the product does
+- Choosing `Input` and `Archive` folders
+- Setting keyboard shortcuts
 
-- macOS computer
-- [Ollama](https://ollama.ai/) installed locally
-- Git
+Users can reopen onboarding any time from the menu bar dropdown via `Onboarding`.
 
-### Installation
+## Keyboard shortcuts
 
-1. **Clone the repository**
+Default shortcuts:
 
-   ```bash
-   git clone https://github.com/daniel-trachtenberg/archive-plugin.git
-   cd archive-plugin
-   ```
+- Search: `Option + Space`
+- Upload: `Option + U`
+- Settings: `Command + ,`
 
-2. **Set up Ollama**
+Users can customize shortcuts in:
 
-   - Install Ollama from [ollama.ai](https://ollama.ai/)
-   - Run the model:
+- Onboarding
+- Settings > Shortcuts
 
-   ```bash
-   ollama run llama3.2
-   ```
+## LLM configuration
 
-3. **Set up the backend**
+Configure from Settings > AI.
 
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   python main.py
-   ```
+Cloud mode:
 
-   The backend server will start on http://localhost:8000
+- Providers: OpenAI, Anthropic
+- Select model from list or enter custom model
+- Add one API key per provider in UI
 
-4. **Run the macOS app**
-   - Open the ArchiveMac project in Xcode:
-   ```bash
-   cd ../ArchiveMac
-   open ArchiveMac.xcodeproj
-   ```
-   - Build and run the app from Xcode
+Local mode:
 
-### Configuration
+- Provider uses local endpoint (Ollama-compatible)
+- Default base URL: `http://localhost:11434`
+- Enter model id manually
 
-You can customize Archive by editing the `.env` file in the backend directory:
+## Security model for API keys
 
-- `ARCHIVE_DIR`: Where your files will be stored (default: ~/Desktop/Archive)
-- `INPUT_DIR`: Where Archive will watch for new files (default: ~/Desktop/Input)
-- `OLLAMA_MODEL`: The LLM model to use (default: gemma3:4b)
+- Plaintext provider keys are migrated to encrypted storage
+- Encrypted values are persisted in backend `.env` (`*_API_KEY_ENC`)
+- Master key is loaded from `ARCHIVE_MASTER_KEY`, system keyring, or local protected key file
+- Keychain fallback is used when encryption is unavailable
 
-## Credits
+## Update checks and versioning
 
-Developed by: **Evan Adami** & **Daniel Trachtenberg**
+The app can check for updates from the menu and Settings.
+
+- Current app version/build is displayed in Settings > About
+- Update checks query GitHub releases (with tag fallback)
+- If no release/tag exists, app shows a friendly message
+
+See `docs/RELEASE.md` for release process.
+
+## API reference
+
+See `docs/API.md`.
+
+## Troubleshooting
+
+See `docs/TROUBLESHOOTING.md`.
+
+## Notes for publishing
+
+Before publishing a release:
+
+- Bump Xcode app version/build (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`)
+- Create and publish a GitHub release tag (example `v1.0.0`)
+- Verify `Check for Updates` resolves latest release
