@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1A1A1A12E6B000100C0D001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A1A1A1A32E6B000100C0D001 /* Sparkle */; };
 		4EDCFC0A2DAC617300C80031 /* HotKey in Frameworks */ = {isa = PBXBuildFile; productRef = 4EDCFC092DAC617300C80031 /* HotKey */; };
 /* End PBXBuildFile section */
 
@@ -56,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1A1A1A12E6B000100C0D001 /* Sparkle in Frameworks */,
 				4EDCFC0A2DAC617300C80031 /* HotKey in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -117,6 +119,7 @@
 			);
 			name = ArchiveMac;
 			packageProductDependencies = (
+				A1A1A1A32E6B000100C0D001 /* Sparkle */,
 				4EDCFC092DAC617300C80031 /* HotKey */,
 			);
 			productName = "llama-stack";
@@ -202,6 +205,7 @@
 			mainGroup = 4EDCFB182DAB0B7800C80031;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A1A1A1A22E6B000100C0D001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -420,6 +424,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_SUAllowsAutomaticUpdates = YES;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "https://raw.githubusercontent.com/daniel-trachtenberg/archive-plugin/main/appcast.xml";
+				INFOPLIST_KEY_SUPublicEDKey = "v8YKcfvEeCyPmHp3mjn+Rx/7lqLK01zI2E3bLi7Biyg=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -452,6 +460,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_SUAllowsAutomaticUpdates = YES;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "https://raw.githubusercontent.com/daniel-trachtenberg/archive-plugin/main/appcast.xml";
+				INFOPLIST_KEY_SUPublicEDKey = "v8YKcfvEeCyPmHp3mjn+Rx/7lqLK01zI2E3bLi7Biyg=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -576,6 +588,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		A1A1A1A22E6B000100C0D001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.0;
+			};
+		};
 		4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/soffes/HotKey";
@@ -587,6 +607,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A1A1A1A32E6B000100C0D001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1A1A1A22E6B000100C0D001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		4EDCFC092DAC617300C80031 /* HotKey */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4EDCFC082DAC617300C80031 /* XCRemoteSwiftPackageReference "HotKey" */;

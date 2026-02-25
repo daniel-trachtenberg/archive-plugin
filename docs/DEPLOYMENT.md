@@ -30,10 +30,18 @@ Backend runtime overrides supported by the app:
 
 ## Prerequisites
 
+1. Python 3.10+ available to build backend runtime.
+2. Sparkle update key configured (one-time):
+
+```bash
+./scripts/setup_sparkle_keys.sh
+```
+
+Optional (recommended for smooth install UX):
+
 1. Apple Developer Program membership.
 2. Developer ID Application certificate in Keychain.
 3. App-specific notarization credentials configured in keychain profile (`xcrun notarytool store-credentials`).
-4. Python 3.10+ available to build backend runtime.
 
 ## Build Backend Runtime
 
@@ -47,7 +55,13 @@ This creates/updates `backend/.venv` and installs `backend/requirements.txt`.
 
 ## Build + Package Command
 
-From repository root:
+From repository root (unsigned build):
+
+```bash
+PREPARE_BACKEND_RUNTIME=1 ./scripts/release_macos.sh
+```
+
+From repository root (Developer ID + notarized build):
 
 ```bash
 PREPARE_BACKEND_RUNTIME=1 \
@@ -67,13 +81,16 @@ Important release-script flags:
 - `PREPARE_BACKEND_RUNTIME=1` (default): build backend runtime before packaging
 - `REQUIRE_BACKEND_RUNTIME=1` (default): fail packaging if `.venv` is missing
 - `NOTARY_KEYCHAIN_PATH=/path/to/keychain-db`: use explicit keychain for notarytool profile
+- `SPARKLE_ENABLED=1` (default): sign DMG with Sparkle key and update `appcast.xml`
+- `SPARKLE_ACCOUNT=archive-plugin`: Sparkle keychain account to sign updates
 
 ## Publish
 
 1. Create Git tag and GitHub Release.
 2. Upload `dist/ArchiveMac-<version>.dmg` as a release asset.
 3. Add checksum to release notes.
-4. Point landing-page button to the latest release asset URL.
+4. Commit/push updated `appcast.xml` after the release is published.
+5. Point landing-page button to the latest release asset URL.
 
 ## GitHub Actions Automation
 
@@ -107,7 +124,7 @@ Required GitHub repository secrets:
 spctl -a -vv --type open dist/ArchiveMac-<version>.dmg
 ```
 
-3. Verify update check in app points to the correct repository/tag.
+3. Verify Sparkle `Check for Updates` offers the latest appcast item.
 
 ## Remaining Risk
 

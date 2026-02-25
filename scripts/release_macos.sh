@@ -18,6 +18,42 @@ REQUIRE_BACKEND_RUNTIME="${REQUIRE_BACKEND_RUNTIME:-1}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 NOTARY_KEYCHAIN_PATH="${NOTARY_KEYCHAIN_PATH:-}"
+SPARKLE_ENABLED="${SPARKLE_ENABLED:-1}"
+SPARKLE_ACCOUNT="${SPARKLE_ACCOUNT:-archive-plugin}"
+SPARKLE_REPOSITORY="${SPARKLE_REPOSITORY:-daniel-trachtenberg/archive-plugin}"
+SPARKLE_APPCAST_PATH="${SPARKLE_APPCAST_PATH:-$ROOT_DIR/appcast.xml}"
+SPARKLE_DOWNLOAD_URL="${SPARKLE_DOWNLOAD_URL:-}"
+SPARKLE_RELEASE_NOTES_URL="${SPARKLE_RELEASE_NOTES_URL:-}"
+SPARKLE_MINIMUM_SYSTEM_VERSION="${SPARKLE_MINIMUM_SYSTEM_VERSION:-}"
+SPARKLE_TOOLS_DIR="${SPARKLE_TOOLS_DIR:-$ROOT_DIR/.sparkle-tools/Sparkle}"
+
+resolve_sparkle_tool() {
+  local tool_name="$1"
+
+  if command -v "$tool_name" >/dev/null 2>&1; then
+    command -v "$tool_name"
+    return 0
+  fi
+
+  local candidate="$SPARKLE_TOOLS_DIR/.build/artifacts/sparkle/Sparkle/bin/$tool_name"
+  if [[ -x "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+
+  if [[ ! -d "$SPARKLE_TOOLS_DIR/.git" ]]; then
+    mkdir -p "$(dirname "$SPARKLE_TOOLS_DIR")"
+    git clone --depth 1 https://github.com/sparkle-project/Sparkle "$SPARKLE_TOOLS_DIR" >/dev/null 2>&1
+  fi
+
+  swift package --package-path "$SPARKLE_TOOLS_DIR" resolve >/dev/null 2>&1
+
+  if [[ ! -x "$candidate" ]]; then
+    return 1
+  fi
+
+  echo "$candidate"
+}
 
 mkdir -p "$DIST_DIR"
 rm -rf "$ARCHIVE_PATH"
@@ -89,6 +125,7 @@ echo "==> Verifying app signature"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 DMG_PATH="${DMG_PATH:-$DIST_DIR/ArchiveMac-${VERSION}.dmg}"
 DMG_STAGING_DIR="$DIST_DIR/dmg-staging"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-Archive Plugin}"
@@ -144,5 +181,54 @@ fi
 
 echo "==> SHA256"
 shasum -a 256 "$DMG_PATH" | tee "${DMG_PATH}.sha256"
+
+if [[ "$SPARKLE_ENABLED" == "1" ]]; then
+  if [[ -z "$SPARKLE_DOWNLOAD_URL" ]]; then
+    SPARKLE_DOWNLOAD_URL="https://github.com/$SPARKLE_REPOSITORY/releases/download/v${VERSION}/$(basename "$DMG_PATH")"
+  fi
+
+  if [[ -z "$SPARKLE_RELEASE_NOTES_URL" ]]; then
+    SPARKLE_RELEASE_NOTES_URL="https://github.com/$SPARKLE_REPOSITORY/releases/tag/v${VERSION}"
+  fi
+
+  echo "==> Sparkle signing"
+
+  if SIGN_TOOL_PATH="$(resolve_sparkle_tool sign_update)"; then
+    if SIGN_OUTPUT="$("$SIGN_TOOL_PATH" --account "$SPARKLE_ACCOUNT" "$DMG_PATH" 2>/dev/null)"; then
+      SPARKLE_SIGNATURE="$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature=\"\\([^\"]*\\)\".*/\\1/p')"
+      if [[ -z "$SPARKLE_SIGNATURE" ]]; then
+        SPARKLE_SIGNATURE="$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature=\"\\([^\"]*\\)\".*/\\1/p')"
+      fi
+
+      SPARKLE_LENGTH="$(echo "$SIGN_OUTPUT" | sed -n 's/.*length=\"\\([0-9]*\\)\".*/\\1/p')"
+      if [[ -z "$SPARKLE_LENGTH" ]]; then
+        SPARKLE_LENGTH="$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:length=\"\\([0-9]*\\)\".*/\\1/p')"
+      fi
+
+      if [[ -z "$SPARKLE_SIGNATURE" || -z "$SPARKLE_LENGTH" ]]; then
+        echo "WARNING: Could not parse Sparkle signature output. Skipping appcast update." >&2
+        echo "Sparkle output: $SIGN_OUTPUT" >&2
+      elif [[ ! -x "$ROOT_DIR/scripts/update_sparkle_appcast.py" ]]; then
+        echo "WARNING: scripts/update_sparkle_appcast.py is missing. Skipping appcast update." >&2
+      else
+        "$ROOT_DIR/scripts/update_sparkle_appcast.py" \
+          --appcast "$SPARKLE_APPCAST_PATH" \
+          --version "$VERSION" \
+          --build "$BUILD_NUMBER" \
+          --download-url "$SPARKLE_DOWNLOAD_URL" \
+          --signature "$SPARKLE_SIGNATURE" \
+          --length "$SPARKLE_LENGTH" \
+          --release-notes-url "$SPARKLE_RELEASE_NOTES_URL" \
+          --minimum-system-version "$SPARKLE_MINIMUM_SYSTEM_VERSION"
+
+        echo "Updated Sparkle appcast: $SPARKLE_APPCAST_PATH"
+      fi
+    else
+      echo "WARNING: Sparkle signing failed for account '$SPARKLE_ACCOUNT'. Run generate_keys first or set SPARKLE_ENABLED=0." >&2
+    fi
+  else
+    echo "WARNING: Could not locate Sparkle sign_update tool. Set SPARKLE_ENABLED=0 to skip." >&2
+  fi
+fi
 
 echo "Release artifact ready: $DMG_PATH"

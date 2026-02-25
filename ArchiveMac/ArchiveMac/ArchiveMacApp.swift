@@ -72,7 +72,7 @@ struct ArchiveMacApp: App {
     @State private var isSearching: Bool = false
     @State private var isUploadViewShowing: Bool = false
     @State private var isSettingsViewShowing: Bool = false
-    @State private var isCheckingForUpdates: Bool = false
+    private let sparkleUpdater = SparkleUpdateController.shared
 
     private static var hasScheduledOnboarding = false
     private static var hasConfiguredBackendLifecycle = false
@@ -131,10 +131,10 @@ struct ArchiveMacApp: App {
                     showOnboardingWindow()
                 }
 
-                Button(isCheckingForUpdates ? "Checking for Updates..." : "Check for Updates") {
+                Button("Check for Updates") {
                     checkForUpdatesFromMenu()
                 }
-                .disabled(isCheckingForUpdates)
+                .disabled(!sparkleUpdater.canCheckForUpdates)
 
                 Divider()
 
@@ -212,26 +212,7 @@ struct ArchiveMacApp: App {
     }
 
     private func checkForUpdatesFromMenu() {
-        guard !isCheckingForUpdates else {
-            return
-        }
-
-        isCheckingForUpdates = true
-
-        Task(priority: .utility) {
-            do {
-                let result = try await UpdateService.shared.checkForUpdates()
-                await MainActor.run {
-                    isCheckingForUpdates = false
-                    UpdateService.shared.presentResultAlert(result)
-                }
-            } catch {
-                await MainActor.run {
-                    isCheckingForUpdates = false
-                    UpdateService.shared.presentErrorAlert(error)
-                }
-            }
-        }
+        sparkleUpdater.checkForUpdates()
     }
 
     private static func scheduleOnboardingIfNeeded() {

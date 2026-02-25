@@ -28,7 +28,7 @@ It watches an input folder, embeds and categorizes files, stores searchable vect
 - First-run onboarding flow
 - Customizable keyboard shortcuts
 - Time-filtered move logs for debugging
-- In-app version display and update checks
+- In-app Sparkle auto-updater
 
 ## Repository structure
 
@@ -118,11 +118,15 @@ Local mode:
 
 ## Update checks and versioning
 
-The app can check for updates from the menu and Settings.
+The app uses Sparkle for in-app updates from the menu and Settings.
 
 - Current app version/build is displayed in Settings > About
-- Update checks query GitHub releases (with tag fallback)
-- If no release/tag exists, app shows a friendly message
+- Sparkle reads `appcast.xml` (hosted from this repo) and downloads/install updates in-app
+- Update payloads are EdDSA signed with Sparkle keys (`SUPublicEDKey` in app Info.plist)
+
+Sparkle feed URL:
+
+- `https://raw.githubusercontent.com/daniel-trachtenberg/archive-plugin/main/appcast.xml`
 
 See `docs/RELEASE.md` for release process.
 
@@ -144,4 +148,5 @@ Before publishing a release:
 
 - Bump Xcode app version/build (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`)
 - Create and publish a GitHub release tag (example `v1.0.0`)
-- Verify `Check for Updates` resolves latest release
+- Run `./scripts/release_macos.sh` and commit updated `appcast.xml`
+- Verify `Check for Updates` offers the new build
