@@ -26,9 +26,19 @@ class SearchService {
     }
     
     private func performSearch(query: String, retryCount: Int) async -> [SearchResult] {
-        // Create URL with the query parameter
-        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "http://localhost:8000/query?query_text=\(encodedQuery)&n_results=10") else {
+        guard var components = URLComponents(
+            url: BackendService.shared.baseURL.appendingPathComponent("query"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            return []
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "query_text", value: query),
+            URLQueryItem(name: "n_results", value: "10"),
+        ]
+
+        guard let url = components.url else {
             return []
         }
         

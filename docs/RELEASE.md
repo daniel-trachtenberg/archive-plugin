@@ -42,13 +42,27 @@ git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
 ```
 
-3. Create GitHub release.
+3. Build distributable artifact.
+
+```bash
+PREPARE_BACKEND_RUNTIME=1 \
+SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+NOTARY_PROFILE="archive-notary" \
+./scripts/release_macos.sh
+```
+
+Expected artifacts:
+
+- `dist/ArchiveMac-1.0.0.dmg`
+- `dist/ArchiveMac-1.0.0.dmg.sha256`
+
+4. Create GitHub release.
 
 - Open: `https://github.com/daniel-trachtenberg/archive-plugin/releases`
 - Click `Draft a new release`
 - Select tag `v1.0.0`
 - Add title and release notes
-- Attach distributable assets if needed
+- Attach the `.dmg` and `.dmg.sha256` files
 - Publish release
 
 Important:

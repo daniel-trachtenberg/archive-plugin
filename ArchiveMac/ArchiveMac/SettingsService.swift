@@ -93,7 +93,9 @@ enum APIError: Error {
 final class SettingsService {
     static let shared = SettingsService()
 
-    private let baseURL = "http://localhost:8000"
+    private var baseURL: String {
+        BackendService.shared.baseURLString
+    }
 
     private let didRunAPIKeyStorageResetMigrationKey = "didRunAPIKeyStorageResetMigration"
     private let inputFolderKey = "inputFolder"

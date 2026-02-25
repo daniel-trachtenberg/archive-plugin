@@ -1,0 +1,117 @@
+name: release-macos
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    env:
+      NOTARY_PROFILE: archive-notary
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare signing keychain
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MACOS_CERTIFICATE_P12_BASE64}" || -z "${MACOS_CERTIFICATE_PASSWORD}" ]]; then
+            echo "Missing signing certificate secrets." >&2
+            exit 1
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/archive-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/archive-signing.p12"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          CERT_PATH="$CERT_PATH" python - <<'PY'
+          import base64
+          import os
+          import pathlib
+
+          cert_data = os.environ["MACOS_CERTIFICATE_P12_BASE64"]
+          output_path = pathlib.Path(os.environ["CERT_PATH"])
+          output_path.write_bytes(base64.b64decode(cert_data))
+          PY
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Store notarytool credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APPLE_ID}" || -z "${APPLE_TEAM_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]]; then
+            echo "Missing notarization secrets." >&2
+            exit 1
+          fi
+
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$KEYCHAIN_PATH"
+
+      - name: Build, sign, notarize, and package
+        env:
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SIGNING_IDENTITY}" ]]; then
+            echo "Missing MACOS_SIGNING_IDENTITY secret." >&2
+            exit 1
+          fi
+
+          PREPARE_BACKEND_RUNTIME=1 \
+          BACKEND_RUNTIME_PYTHON=python3 \
+          SIGNING_IDENTITY="$SIGNING_IDENTITY" \
+          NOTARY_PROFILE="$NOTARY_PROFILE" \
+          NOTARY_KEYCHAIN_PATH="$KEYCHAIN_PATH" \
+          ./scripts/release_macos.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" dist/*.dmg dist/*.dmg.sha256 --clobber

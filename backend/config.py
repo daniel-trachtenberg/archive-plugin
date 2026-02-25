@@ -2,10 +2,18 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load environment variables from a .env file if present
-load_dotenv()
+DEFAULT_ENV_PATH = Path(__file__).resolve().parent / ".env"
+ENV_PATH = Path(
+    os.path.expanduser(os.getenv("ARCHIVE_ENV_PATH", str(DEFAULT_ENV_PATH)))
+).resolve()
+
+# Load environment variables from the configured .env path if present.
+load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 class Settings:
+    # Environment configuration
+    ENV_PATH: str = str(ENV_PATH)
+
     # Application settings
     APP_TITLE: str = "Archive"
     APP_DESCRIPTION: str = (

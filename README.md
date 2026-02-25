@@ -122,6 +122,10 @@ See `docs/API.md`.
 
 See `docs/TROUBLESHOOTING.md`.
 
+## Deployment
+
+See `docs/DEPLOYMENT.md` for packaging/signing/notarization and direct-download release workflow.
+
 ## Notes for publishing
 
 Before publishing a release:

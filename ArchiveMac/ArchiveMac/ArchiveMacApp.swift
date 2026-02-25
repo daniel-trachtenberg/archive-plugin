@@ -75,12 +75,27 @@ struct ArchiveMacApp: App {
     @State private var isCheckingForUpdates: Bool = false
 
     private static var hasScheduledOnboarding = false
+    private static var hasConfiguredBackendLifecycle = false
+    private static var backendTerminationObserver: NSObjectProtocol?
 
     // Menu constants
     private let menuWidth: CGFloat = 150
     private let menuPadding: CGFloat = 8
 
     init() {
+        if !Self.hasConfiguredBackendLifecycle {
+            Self.hasConfiguredBackendLifecycle = true
+            BackendService.shared.startIfNeeded()
+
+            Self.backendTerminationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                BackendService.shared.stopManagedBackend()
+            }
+        }
+
         if !Self.hasScheduledOnboarding, !SettingsService.shared.hasCompletedOnboarding() {
             Self.hasScheduledOnboarding = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {

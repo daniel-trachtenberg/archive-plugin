@@ -226,7 +226,13 @@ async def get_directories():
 # Helper function to update .env file
 def update_env_values(values: dict):
     """Update selected keys in the backend .env file."""
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_path = os.path.expanduser(
+        getattr(settings, "ENV_PATH", "")
+        or os.path.join(os.path.dirname(__file__), ".env")
+    )
+    env_dir = os.path.dirname(env_path)
+    if env_dir:
+        Path(env_dir).mkdir(parents=True, exist_ok=True)
 
     if not os.path.exists(env_path):
         with open(env_path, "w") as f:

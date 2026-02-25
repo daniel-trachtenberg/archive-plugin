@@ -14,3 +14,4 @@ xcuserdata/
 # Local runtime artifacts
 backend/.chromadb/
 backend/*.db
+dist/
