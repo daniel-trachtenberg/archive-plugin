@@ -1,10 +1,22 @@
-[![archive-banner.png](https://i.postimg.cc/NfrkTK7Q/archive-banner.png)](https://postimg.cc/YhMFBqsP)
+[![Archive Landing Page](https://image.thum.io/get/width/1200/noanimate/https://archive-plugin.vercel.app/)](https://archive-plugin.vercel.app/)
 
 # Archive Plugin
+
+[![Latest Version](https://img.shields.io/github/v/release/daniel-trachtenberg/archive-plugin?display_name=tag&label=latest%20version)](https://github.com/daniel-trachtenberg/archive-plugin/releases/latest)
+[![Download macOS DMG](https://img.shields.io/badge/download-macOS%20DMG-1f2a3d?logo=apple&logoColor=white)](https://github.com/daniel-trachtenberg/archive-plugin/releases/latest/download/ArchiveMac-1.0.dmg)
+[![Website](https://img.shields.io/badge/website-archive--plugin.vercel.app-0ea5e9)](https://archive-plugin.vercel.app/)
 
 Archive Plugin is a macOS menu bar app plus local Python backend for AI-powered file organization and semantic search.
 
 It watches an input folder, embeds and categorizes files, stores searchable vectors in ChromaDB, and helps you find files quickly from a Spotlight-style search window.
+
+## Download
+
+- Direct download (latest macOS DMG): `https://github.com/daniel-trachtenberg/archive-plugin/releases/latest/download/ArchiveMac-1.0.dmg`
+- Latest release page: `https://github.com/daniel-trachtenberg/archive-plugin/releases/latest`
+- Live landing page: `https://archive-plugin.vercel.app/`
+
+> Note: the current public build is unsigned and not notarized. macOS may require right-click `Open` and/or `System Settings > Privacy & Security > Open Anyway` on first launch.
 
 ## Product scope
 
