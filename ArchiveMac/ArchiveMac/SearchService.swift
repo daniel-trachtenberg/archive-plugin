@@ -63,8 +63,10 @@ class SearchService {
             let decoder = JSONDecoder()
             let searchResponse = try decoder.decode(SearchResponse.self, from: data)
             
-            // Convert file paths to SearchResult objects
-            return searchResponse.results.map { filePath -> SearchResult in
+            // Exclude hidden files/folders in case stale index entries still exist.
+            return searchResponse.results
+                .filter { !self.isHiddenPath($0) }
+                .map { filePath -> SearchResult in
                 let url = URL(fileURLWithPath: filePath)
                 let fileName = url.lastPathComponent
                 let fileDirectory = url.deletingLastPathComponent().path
@@ -75,7 +77,7 @@ class SearchService {
                     path: fileDirectory,
                     type: fileType
                 )
-            }
+                }
             
         } catch {
             print("Search error: \(error.localizedDescription)")
@@ -107,6 +109,14 @@ class SearchService {
             return .text
         default:
             return .other
+        }
+    }
+
+    private func isHiddenPath(_ path: String) -> Bool {
+        let components = URL(fileURLWithPath: path).pathComponents
+        return components.contains { component in
+            guard component != "/" && component != "." else { return false }
+            return component.hasPrefix(".")
         }
     }
 }

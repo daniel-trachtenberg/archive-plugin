@@ -115,6 +115,16 @@ def _sync_active_api_key(provider: str) -> None:
     settings.LLM_API_KEY = _get_provider_api_key(provider)
 
 
+def _is_hidden_path(path: str) -> bool:
+    normalized = Path(path)
+    for part in normalized.parts:
+        if not part or part in (os.sep, "."):
+            continue
+        if part.startswith("."):
+            return True
+    return False
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
@@ -170,7 +180,13 @@ async def query(
     full_paths = []
     seen = set()
     for relative_path in formatted_results:
+        if _is_hidden_path(relative_path):
+            continue
+
         absolute_path = os.path.join(settings.ARCHIVE_DIR, relative_path)
+        if _is_hidden_path(absolute_path):
+            continue
+
         if absolute_path in seen:
             continue
         if os.path.exists(absolute_path):
