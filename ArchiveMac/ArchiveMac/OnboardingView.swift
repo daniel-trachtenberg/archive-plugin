@@ -139,7 +139,7 @@ struct OnboardingView: View {
                     case .ai:
                         aiStep
                     case .shortcuts:
-                        shortcutStep
+                        shortcutStepScrollable
                     }
                 }
             }
@@ -260,6 +260,15 @@ struct OnboardingView: View {
 
     private var folderStep: some View {
         VStack(alignment: .leading, spacing: 16) {
+            onboardingFeatureCard(
+                icon: watchInputFolder ? "📂" : "⏸️",
+                title: "Control file intake",
+                detail: watchInputFolder
+                    ? "Archive watches your Input folder in the background."
+                    : "Input watching is paused. You can still upload manually.",
+                colors: [Color.orange.opacity(0.22), Color.yellow.opacity(0.18)]
+            )
+
             Text("Choose where files come in and where Archive stores organized files.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -391,6 +400,13 @@ struct OnboardingView: View {
 
     private var shortcutStep: some View {
         VStack(alignment: .leading, spacing: 12) {
+            onboardingFeatureCard(
+                icon: "⌨️",
+                title: "Set your command layer",
+                detail: "Pick shortcuts that feel natural for daily use.",
+                colors: [Color.purple.opacity(0.2), Color.indigo.opacity(0.17)]
+            )
+
             Text("Pick shortcuts that feel natural. These are available globally while the app is running.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -412,9 +428,48 @@ struct OnboardingView: View {
                 subtitle: ShortcutAction.settings.subtitle,
                 shortcut: $settingsShortcut
             )
-
-            Spacer(minLength: 0)
         }
+    }
+
+    private var shortcutStepScrollable: some View {
+        ScrollView {
+            shortcutStep
+                .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func onboardingFeatureCard(
+        icon: String,
+        title: String,
+        detail: String,
+        colors: [Color]
+    ) -> some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(alignment: .leading) {
+                HStack(spacing: 12) {
+                    Text(icon)
+                        .font(.system(size: 36))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.system(size: 18, weight: .semibold))
+                        Text(detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(16)
+            }
+            .frame(height: 118)
     }
 
     private var footer: some View {

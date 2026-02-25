@@ -169,6 +169,18 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                settingsHeroCard
+                    .padding(.vertical, 4)
+                    .listRowInsets(
+                        EdgeInsets(
+                            top: 8,
+                            leading: UIConstants.settingsHeaderPadding,
+                            bottom: 8,
+                            trailing: UIConstants.settingsHeaderPadding
+                        )
+                    )
+                    .listRowBackground(Color.clear)
+
                 Section("Folders") {
                     folderRow(title: "Input", path: $inputFolderPath, isInput: true)
                     folderRow(title: "Archive", path: $outputFolderPath, isInput: false)
@@ -354,7 +366,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Button("Clean Up & Quit", role: .destructive) {
+                            Button("Uninstall", role: .destructive) {
                                 showUninstallConfirmation = true
                             }
                             .buttonStyle(.borderedProminent)
@@ -422,7 +434,7 @@ struct SettingsView: View {
             isPresented: $showUninstallConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Clean Up & Quit", role: .destructive) {
+            Button("Uninstall", role: .destructive) {
                 runUninstallCleanupAndQuit()
             }
             Button("Cancel", role: .cancel) {}
@@ -459,6 +471,61 @@ struct SettingsView: View {
         }
         .padding(.horizontal, UIConstants.settingsHeaderPadding)
         .padding(.vertical, 10)
+    }
+
+    private var settingsHeroCard: some View {
+        let autoValue = watchInputFolder ? "On" : "Off"
+        let modeValue = providerMode == .cloud ? "Cloud" : "Local"
+        let versionValue = UpdateService.shared.versionDisplayString
+
+        return RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Color.indigo.opacity(0.2), Color.teal.opacity(0.16)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Text("⚙️")
+                            .font(.system(size: 30))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Archive Settings")
+                                .font(.system(size: 17, weight: .semibold))
+                            Text("Control folders, AI, shortcuts, updates, and uninstall.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        settingsStatusPill(label: "Auto", value: autoValue, tint: autoValue == "On" ? .green : .orange)
+                        settingsStatusPill(label: "Mode", value: modeValue, tint: modeValue == "Cloud" ? .blue : .teal)
+                        Spacer()
+                        Text(versionValue)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(14)
+            }
+            .frame(height: 108)
+    }
+
+    private func settingsStatusPill(label: String, value: String, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(tint.opacity(0.18), in: Capsule())
     }
 
     private var shortcutEditorRows: some View {
