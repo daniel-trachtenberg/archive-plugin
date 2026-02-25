@@ -64,6 +64,19 @@ struct MoveLogsResponse: Codable {
     var logs: [MoveLogEntry]
 }
 
+struct UninstallCleanupRequest: Codable {
+    var delete_database: Bool
+    var delete_move_logs: Bool
+    var delete_credentials: Bool
+    var delete_backend_support: Bool
+}
+
+struct UninstallCleanupResponse: Codable {
+    var success: Bool
+    var deleted_paths: [String]
+    var warnings: [String]
+}
+
 enum APIError: Error {
     case invalidURL
     case networkError(Error)
@@ -367,6 +380,40 @@ final class SettingsService {
             return try decode(MoveLogsResponse.self, data: data, response: response)
         } catch let error as APIError {
             throw error
+        } catch {
+            throw APIError.networkError(error)
+        }
+    }
+
+    func runUninstallCleanup(
+        deleteDatabase: Bool,
+        deleteMoveLogs: Bool,
+        deleteCredentials: Bool,
+        deleteBackendSupport: Bool
+    ) async throws -> UninstallCleanupResponse {
+        guard let url = URL(string: "\(baseURL)/uninstall-cleanup") else {
+            throw APIError.invalidURL
+        }
+
+        let payload = UninstallCleanupRequest(
+            delete_database: deleteDatabase,
+            delete_move_logs: deleteMoveLogs,
+            delete_credentials: deleteCredentials,
+            delete_backend_support: deleteBackendSupport
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return try decode(UninstallCleanupResponse.self, data: data, response: response)
+        } catch let error as APIError {
+            throw error
+        } catch let error as EncodingError {
+            throw APIError.networkError(error)
         } catch {
             throw APIError.networkError(error)
         }

@@ -116,6 +116,13 @@ struct SettingsView: View {
     @State private var moveLogs: [MoveLogEntry] = []
     @State private var isLoadingMoveLogs: Bool = false
     @State private var moveLogsErrorMessage: String? = nil
+    @State private var showUninstallConfirmation: Bool = false
+    @State private var deleteDatabaseOnUninstall: Bool = true
+    @State private var deleteMoveLogsOnUninstall: Bool = true
+    @State private var deleteCredentialsOnUninstall: Bool = true
+    @State private var deleteBackendSupportOnUninstall: Bool = true
+    @State private var isRunningUninstallCleanup: Bool = false
+    @State private var uninstallStatusMessage: String? = nil
     private let providerModeOptions: [ProviderMode] = [.cloud, .local]
 
     private let customModelToken = "__custom_model__"
@@ -329,6 +336,49 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Section("Uninstall") {
+                    Text("Clean up local Archive data before removing the app.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Toggle("Delete vector database (.chromadb)", isOn: $deleteDatabaseOnUninstall)
+                    Toggle("Delete move logs", isOn: $deleteMoveLogsOnUninstall)
+                    Toggle("Delete saved API keys and credentials", isOn: $deleteCredentialsOnUninstall)
+                    Toggle("Delete app support files", isOn: $deleteBackendSupportOnUninstall)
+
+                    if let uninstallStatusMessage {
+                        Text(uninstallStatusMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        if isRunningUninstallCleanup {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Running cleanup...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Button("Clean Up & Quit", role: .destructive) {
+                                showUninstallConfirmation = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+
+                        Spacer()
+
+                        Button("Open Applications Folder") {
+                            NSWorkspace.shared.open(
+                                URL(fileURLWithPath: "/Applications", isDirectory: true)
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
             }
             .formStyle(.grouped)
 
@@ -373,6 +423,18 @@ struct SettingsView: View {
         }
         .onChange(of: moveLogsTimeframe) { _, _ in
             loadMoveLogs()
+        }
+        .confirmationDialog(
+            "Clean up local data and quit Archive?",
+            isPresented: $showUninstallConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clean Up & Quit", role: .destructive) {
+                runUninstallCleanupAndQuit()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Selected data will be permanently removed. You can then drag ArchiveMac.app to Trash.")
         }
     }
 
@@ -818,6 +880,50 @@ struct SettingsView: View {
                         updateStatusMessage = "Update check failed"
                     }
                     UpdateService.shared.presentErrorAlert(error)
+                }
+            }
+        }
+    }
+
+    private func runUninstallCleanupAndQuit() {
+        guard !isRunningUninstallCleanup else {
+            return
+        }
+
+        isRunningUninstallCleanup = true
+        uninstallStatusMessage = nil
+        errorMessage = nil
+
+        Task(priority: .utility) {
+            do {
+                let response = try await SettingsService.shared.runUninstallCleanup(
+                    deleteDatabase: deleteDatabaseOnUninstall,
+                    deleteMoveLogs: deleteMoveLogsOnUninstall,
+                    deleteCredentials: deleteCredentialsOnUninstall,
+                    deleteBackendSupport: deleteBackendSupportOnUninstall
+                )
+
+                await MainActor.run {
+                    isRunningUninstallCleanup = false
+                    if response.warnings.isEmpty {
+                        uninstallStatusMessage = "Cleanup complete. Quitting..."
+                    } else {
+                        uninstallStatusMessage = "Cleanup completed with warnings. Quitting..."
+                        errorMessage = response.warnings.joined(separator: " | ")
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        NSApplication.shared.terminate(nil)
+                    }
+                }
+            } catch let error as APIError {
+                await MainActor.run {
+                    isRunningUninstallCleanup = false
+                    errorMessage = "Cleanup failed: \(error.localizedDescription)"
+                }
+            } catch {
+                await MainActor.run {
+                    isRunningUninstallCleanup = false
+                    errorMessage = "Cleanup failed: \(error.localizedDescription)"
                 }
             }
         }

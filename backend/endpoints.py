@@ -11,6 +11,7 @@ import services.credentials_service as credentials
 import services.move_log_service as move_logs
 import utils
 import os
+import shutil
 from config import settings
 from pathlib import Path
 from pydantic import BaseModel
@@ -89,6 +90,19 @@ class MoveLogResponse(BaseModel):
     logs: list[MoveLogEntry]
 
 
+class UninstallCleanupConfig(BaseModel):
+    delete_database: bool = True
+    delete_move_logs: bool = True
+    delete_credentials: bool = True
+    delete_backend_support: bool = True
+
+
+class UninstallCleanupResponse(BaseModel):
+    success: bool
+    deleted_paths: list[str]
+    warnings: list[str]
+
+
 def _mask_api_key(value: str) -> str:
     if not value:
         return ""
@@ -123,6 +137,21 @@ def _is_hidden_path(path: str) -> bool:
         if part.startswith("."):
             return True
     return False
+
+
+def _remove_path(path: Path, deleted_paths: list[str], warnings: list[str]) -> None:
+    try:
+        if path.is_symlink() or path.is_file():
+            if path.exists() or path.is_symlink():
+                path.unlink()
+                deleted_paths.append(str(path))
+            return
+
+        if path.is_dir():
+            shutil.rmtree(path)
+            deleted_paths.append(str(path))
+    except Exception as exc:
+        warnings.append(f"Failed to remove {path}: {exc}")
 
 
 @router.post("/upload")
@@ -487,6 +516,73 @@ async def delete_llm_api_key(provider: str = Query()):
     )
 
     return {"provider": provider, "api_key_masked": ""}
+
+
+@router.post("/uninstall-cleanup", response_model=UninstallCleanupResponse)
+async def uninstall_cleanup(config: UninstallCleanupConfig):
+    """
+    Remove local Archive data to help users uninstall cleanly.
+    """
+    deleted_paths: list[str] = []
+    warnings: list[str] = []
+
+    if config.delete_database:
+        _remove_path(Path(settings.CHROMA_DB_DIR), deleted_paths, warnings)
+
+    if config.delete_move_logs:
+        move_log_path = Path(settings.MOVE_LOG_DB_PATH)
+        _remove_path(move_log_path, deleted_paths, warnings)
+        _remove_path(Path(f"{settings.MOVE_LOG_DB_PATH}-shm"), deleted_paths, warnings)
+        _remove_path(Path(f"{settings.MOVE_LOG_DB_PATH}-wal"), deleted_paths, warnings)
+
+    if config.delete_credentials:
+        for provider in ("openai", "anthropic", "openai_compatible"):
+            try:
+                _set_provider_api_key(provider, "")
+            except Exception as exc:
+                warnings.append(f"Failed to remove {provider} API key: {exc}")
+
+        settings.LLM_API_KEY = ""
+
+        try:
+            update_env_values(
+                {
+                    **credentials.provider_api_env_values(settings),
+                }
+            )
+        except Exception as exc:
+            warnings.append(f"Failed to clear persisted API key fields: {exc}")
+
+        credentials_key_path = Path.home() / ".archive_plugin" / "master.key"
+        _remove_path(credentials_key_path, deleted_paths, warnings)
+
+        credentials_dir = credentials_key_path.parent
+        try:
+            credentials_dir.rmdir()
+            deleted_paths.append(str(credentials_dir))
+        except OSError:
+            pass
+
+    if config.delete_backend_support:
+        env_path = Path(getattr(settings, "ENV_PATH", ""))
+        support_dir = env_path.parent
+        # Safety guard so we never recursively remove arbitrary directories.
+        safe_to_remove = (
+            support_dir.name == "backend"
+            and "ArchivePlugin" in support_dir.parts
+        )
+        if safe_to_remove:
+            _remove_path(support_dir, deleted_paths, warnings)
+        else:
+            warnings.append(
+                f"Skipped backend support cleanup for safety: {support_dir}"
+            )
+
+    return {
+        "success": len(warnings) == 0,
+        "deleted_paths": deleted_paths,
+        "warnings": warnings,
+    }
 
 
 @router.get("/move-logs", response_model=MoveLogResponse)
