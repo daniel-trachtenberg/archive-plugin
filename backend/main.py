@@ -64,22 +64,28 @@ def restart_file_watcher():
             global_observer.join()
             logging.info("Existing input file watcher stopped")
 
-        # Create a new input observer with the updated settings
-        event_handler = InputDirectoryHandler()
-        observer = Observer()
-        observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
+        # Update input watcher based on settings.
+        if settings.WATCH_INPUT_DIR:
+            event_handler = InputDirectoryHandler()
+            observer = Observer()
+            observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
 
-        # Start the new input observer
-        threading.Thread(
-            target=_run_observer_with_event_loop,
-            args=(observer, event_handler.loop),
-            daemon=True,
-        ).start()
-        print(f"Started watching input directory: {settings.INPUT_DIR}")
+            # Start the new input observer
+            threading.Thread(
+                target=_run_observer_with_event_loop,
+                args=(observer, event_handler.loop),
+                daemon=True,
+            ).start()
+            print(f"Started watching input directory: {settings.INPUT_DIR}")
 
-        # Update global references for input watcher
-        global_observer = observer
-        global_event_handler = event_handler
+            # Update global references for input watcher
+            global_observer = observer
+            global_event_handler = event_handler
+        else:
+            print("Input directory watcher is disabled in settings")
+            logging.info("Input directory watcher is disabled in settings")
+            global_observer = None
+            global_event_handler = None
 
         # Stop existing archive observer if it's running
         if global_archive_observer and global_archive_observer.is_alive():
@@ -112,7 +118,10 @@ def restart_file_watcher():
         print("---------------------------------------------\n")
 
         logging.info(
-            f"File watchers restarted. Input: {settings.INPUT_DIR}, Archive: {settings.ARCHIVE_DIR}"
+            (
+                f"File watchers restarted. Input: {settings.INPUT_DIR} "
+                f"(enabled={settings.WATCH_INPUT_DIR}), Archive: {settings.ARCHIVE_DIR}"
+            )
         )
 
 
@@ -131,6 +140,7 @@ async def lifespan(app: FastAPI):
         print("\nInitializing file watchers...")
         restart_file_watcher()
         print(f"Input directory: {settings.INPUT_DIR}")
+        print(f"Input watcher enabled: {settings.WATCH_INPUT_DIR}")
         print(f"Archive directory: {settings.ARCHIVE_DIR}")
 
         # Run the reconciliation on startup
@@ -920,6 +930,7 @@ async def health_check():
             else "warning"
         ),
         "input_dir": {"path": settings.INPUT_DIR, "exists": input_exists},
+        "watch_input_dir": settings.WATCH_INPUT_DIR,
         "archive_dir": {"path": settings.ARCHIVE_DIR, "exists": archive_exists},
         "ollama": ollama_status,
         "timestamp": datetime.now().isoformat(),

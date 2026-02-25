@@ -10,6 +10,21 @@ ENV_PATH = Path(
 # Load environment variables from the configured .env path if present.
 load_dotenv(dotenv_path=ENV_PATH, override=False)
 
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    return default
+
+
 class Settings:
     # Environment configuration
     ENV_PATH: str = str(ENV_PATH)
@@ -49,6 +64,7 @@ class Settings:
     USER_HOME = os.path.expanduser("~")
     ARCHIVE_DIR: str = os.getenv("ARCHIVE_DIR", os.path.join(USER_HOME, "Desktop"))
     INPUT_DIR: str = os.getenv("INPUT_DIR", os.path.join(USER_HOME, "Downloads"))
+    WATCH_INPUT_DIR: bool = _parse_env_bool("WATCH_INPUT_DIR", True)
 
     # Create directories if they don't exist
     Path(ARCHIVE_DIR).mkdir(parents=True, exist_ok=True)

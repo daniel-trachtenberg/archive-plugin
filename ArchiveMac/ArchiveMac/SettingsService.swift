@@ -3,6 +3,26 @@ import Foundation
 struct DirectoryConfig: Codable {
     var input_dir: String
     var archive_dir: String
+    var watch_input_dir: Bool
+
+    init(input_dir: String, archive_dir: String, watch_input_dir: Bool = true) {
+        self.input_dir = input_dir
+        self.archive_dir = archive_dir
+        self.watch_input_dir = watch_input_dir
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case input_dir
+        case archive_dir
+        case watch_input_dir
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        input_dir = try container.decode(String.self, forKey: .input_dir)
+        archive_dir = try container.decode(String.self, forKey: .archive_dir)
+        watch_input_dir = try container.decodeIfPresent(Bool.self, forKey: .watch_input_dir) ?? true
+    }
 }
 
 enum LLMProvider: String, Codable, CaseIterable, Identifiable {
@@ -113,6 +133,7 @@ final class SettingsService {
     private let didRunAPIKeyStorageResetMigrationKey = "didRunAPIKeyStorageResetMigration"
     private let inputFolderKey = "inputFolder"
     private let outputFolderKey = "outputFolder"
+    private let watchInputFolderKey = "watchInputFolder"
     private let llmProviderKey = "llmProvider"
     private let llmModelKey = "llmModel"
     private let llmBaseURLKey = "llmBaseURL"
@@ -231,12 +252,20 @@ final class SettingsService {
         }
     }
 
-    func updateDirectoriesInAPI(inputDir: String, archiveDir: String) async throws -> DirectoryConfig {
+    func updateDirectoriesInAPI(
+        inputDir: String,
+        archiveDir: String,
+        watchInputDir: Bool
+    ) async throws -> DirectoryConfig {
         guard let url = URL(string: "\(baseURL)/directories") else {
             throw APIError.invalidURL
         }
 
-        let config = DirectoryConfig(input_dir: inputDir, archive_dir: archiveDir)
+        let config = DirectoryConfig(
+            input_dir: inputDir,
+            archive_dir: archiveDir,
+            watch_input_dir: watchInputDir
+        )
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -385,21 +414,16 @@ final class SettingsService {
         }
     }
 
-    func runUninstallCleanup(
-        deleteDatabase: Bool,
-        deleteMoveLogs: Bool,
-        deleteCredentials: Bool,
-        deleteBackendSupport: Bool
-    ) async throws -> UninstallCleanupResponse {
+    func runUninstallCleanup() async throws -> UninstallCleanupResponse {
         guard let url = URL(string: "\(baseURL)/uninstall-cleanup") else {
             throw APIError.invalidURL
         }
 
         let payload = UninstallCleanupRequest(
-            delete_database: deleteDatabase,
-            delete_move_logs: deleteMoveLogs,
-            delete_credentials: deleteCredentials,
-            delete_backend_support: deleteBackendSupport
+            delete_database: true,
+            delete_move_logs: true,
+            delete_credentials: true,
+            delete_backend_support: true
         )
 
         var request = URLRequest(url: url)
@@ -435,6 +459,17 @@ final class SettingsService {
 
     func setOutputFolder(_ path: String) {
         UserDefaults.standard.set(path, forKey: outputFolderKey)
+    }
+
+    func getWatchInputFolder() -> Bool {
+        if UserDefaults.standard.object(forKey: watchInputFolderKey) == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: watchInputFolderKey)
+    }
+
+    func setWatchInputFolder(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: watchInputFolderKey)
     }
 
     func getLLMProvider() -> LLMProvider {
@@ -565,11 +600,13 @@ final class SettingsService {
     func saveAllSettingsToBackend() async throws {
         let dirs = try await updateDirectoriesInAPI(
             inputDir: getInputFolder(),
-            archiveDir: getOutputFolder()
+            archiveDir: getOutputFolder(),
+            watchInputDir: getWatchInputFolder()
         )
 
         setInputFolder(dirs.input_dir)
         setOutputFolder(dirs.archive_dir)
+        setWatchInputFolder(dirs.watch_input_dir)
 
         let llm = try await updateLLMSettingsInAPI(
             provider: getLLMProvider().rawValue,
@@ -589,6 +626,7 @@ final class SettingsService {
         let directories = try await fetchDirectoriesFromAPI()
         setInputFolder(directories.input_dir)
         setOutputFolder(directories.archive_dir)
+        setWatchInputFolder(directories.watch_input_dir)
 
         let llm = try await fetchLLMSettingsFromAPI()
         if let provider = LLMProvider(rawValue: llm.provider) {

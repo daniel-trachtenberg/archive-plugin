@@ -90,6 +90,7 @@ struct SettingsView: View {
 
     @State private var inputFolderPath: String
     @State private var outputFolderPath: String
+    @State private var watchInputFolder: Bool
 
     @State private var providerMode: ProviderMode
     @State private var cloudVendor: CloudVendor
@@ -116,10 +117,6 @@ struct SettingsView: View {
     @State private var isLoadingMoveLogs: Bool = false
     @State private var moveLogsErrorMessage: String? = nil
     @State private var showUninstallConfirmation: Bool = false
-    @State private var deleteDatabaseOnUninstall: Bool = true
-    @State private var deleteMoveLogsOnUninstall: Bool = true
-    @State private var deleteCredentialsOnUninstall: Bool = true
-    @State private var deleteBackendSupportOnUninstall: Bool = true
     @State private var isRunningUninstallCleanup: Bool = false
     @State private var uninstallStatusMessage: String? = nil
     private let providerModeOptions: [ProviderMode] = [.cloud, .local]
@@ -145,6 +142,7 @@ struct SettingsView: View {
         self._isSettingsViewShowing = isSettingsViewShowing
         self._inputFolderPath = State(initialValue: SettingsService.shared.getInputFolder())
         self._outputFolderPath = State(initialValue: SettingsService.shared.getOutputFolder())
+        self._watchInputFolder = State(initialValue: SettingsService.shared.getWatchInputFolder())
 
         let storedProvider = SettingsService.shared.getLLMProvider()
         self._llmProvider = State(initialValue: storedProvider)
@@ -174,6 +172,7 @@ struct SettingsView: View {
                 Section("Folders") {
                     folderRow(title: "Input", path: $inputFolderPath, isInput: true)
                     folderRow(title: "Archive", path: $outputFolderPath, isInput: false)
+                    watchInputRow
                 }
 
                 Section("AI") {
@@ -337,14 +336,9 @@ struct SettingsView: View {
                 }
 
                 Section("Uninstall") {
-                    Text("Clean up local Archive data before removing the app.")
+                    Text("This removes all local Archive data, then quits the app.")
                         .font(.caption)
                         .foregroundColor(.secondary)
-
-                    Toggle("Delete vector database (.chromadb)", isOn: $deleteDatabaseOnUninstall)
-                    Toggle("Delete move logs", isOn: $deleteMoveLogsOnUninstall)
-                    Toggle("Delete saved API keys and credentials", isOn: $deleteCredentialsOnUninstall)
-                    Toggle("Delete app support files", isOn: $deleteBackendSupportOnUninstall)
 
                     if let uninstallStatusMessage {
                         Text(uninstallStatusMessage)
@@ -433,7 +427,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Selected data will be permanently removed. You can then drag ArchiveMac.app to Trash.")
+            Text("All local Archive data will be permanently removed. You can then drag ArchiveMac.app to Trash.")
         }
     }
 
@@ -502,6 +496,28 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+    }
+
+    private var watchInputRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Auto")
+                .frame(width: 56, alignment: .leading)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Watch Input automatically")
+                    .font(.system(size: 13, weight: .medium))
+                Text("When off, files are not auto-processed from Input.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: $watchInputFolder)
+                .labelsHidden()
+                .toggleStyle(.switch)
         }
     }
 
@@ -639,6 +655,7 @@ struct SettingsView: View {
                 await MainActor.run {
                     inputFolderPath = SettingsService.shared.getInputFolder()
                     outputFolderPath = SettingsService.shared.getOutputFolder()
+                    watchInputFolder = SettingsService.shared.getWatchInputFolder()
                     llmProvider = SettingsService.shared.getLLMProvider()
                     llmModel = SettingsService.shared.getLLMModel()
                     llmBaseURL = SettingsService.shared.getLLMBaseURL()
@@ -701,6 +718,7 @@ struct SettingsView: View {
 
         SettingsService.shared.setInputFolder(inputFolderPath)
         SettingsService.shared.setOutputFolder(outputFolderPath)
+        SettingsService.shared.setWatchInputFolder(watchInputFolder)
         SettingsService.shared.setLLMProvider(llmProvider)
         SettingsService.shared.setLLMModel(llmModel.trimmingCharacters(in: .whitespacesAndNewlines))
 
@@ -862,12 +880,7 @@ struct SettingsView: View {
 
         Task(priority: .utility) {
             do {
-                let response = try await SettingsService.shared.runUninstallCleanup(
-                    deleteDatabase: deleteDatabaseOnUninstall,
-                    deleteMoveLogs: deleteMoveLogsOnUninstall,
-                    deleteCredentials: deleteCredentialsOnUninstall,
-                    deleteBackendSupport: deleteBackendSupportOnUninstall
-                )
+                let response = try await SettingsService.shared.runUninstallCleanup()
 
                 await MainActor.run {
                     isRunningUninstallCleanup = false

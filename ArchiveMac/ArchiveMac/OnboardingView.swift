@@ -73,6 +73,7 @@ struct OnboardingView: View {
 
     @State private var inputFolderPath: String
     @State private var outputFolderPath: String
+    @State private var watchInputFolder: Bool
     @State private var providerMode: OnboardingProviderMode
     @State private var cloudVendor: OnboardingCloudVendor
     @State private var llmModel: String
@@ -93,6 +94,7 @@ struct OnboardingView: View {
         self.onComplete = onComplete
         self._inputFolderPath = State(initialValue: SettingsService.shared.getInputFolder())
         self._outputFolderPath = State(initialValue: SettingsService.shared.getOutputFolder())
+        self._watchInputFolder = State(initialValue: SettingsService.shared.getWatchInputFolder())
 
         let storedProvider = SettingsService.shared.getLLMProvider()
         let storedModel = SettingsService.shared.getLLMModel()
@@ -264,6 +266,7 @@ struct OnboardingView: View {
 
             folderRow(title: "Input", path: $inputFolderPath, isInput: true)
             folderRow(title: "Archive", path: $outputFolderPath, isInput: false)
+            onboardingWatchInputRow
 
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(NSColor.controlBackgroundColor))
@@ -271,7 +274,11 @@ struct OnboardingView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Tip")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("Use a dedicated Input folder so new files can be discovered and organized without mixing with other files.")
+                        Text(
+                            watchInputFolder
+                                ? "Use a dedicated Input folder so new files can be discovered and organized without mixing with other files."
+                                : "Input watching is off. You can still upload manually and turn watching on later in Settings."
+                        )
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -476,6 +483,23 @@ struct OnboardingView: View {
         }
     }
 
+    private var onboardingWatchInputRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Auto")
+                .frame(width: 64, alignment: .leading)
+                .foregroundStyle(.secondary)
+
+            Text("Watch Input automatically")
+                .font(.system(size: 13, weight: .medium))
+
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: $watchInputFolder)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+    }
+
     private func applyCloudVendor() {
         switch cloudVendor {
         case .openai:
@@ -592,6 +616,7 @@ struct OnboardingView: View {
 
         SettingsService.shared.setInputFolder(normalizedInput)
         SettingsService.shared.setOutputFolder(normalizedOutput)
+        SettingsService.shared.setWatchInputFolder(watchInputFolder)
         SettingsService.shared.setLLMProvider(selectedProvider)
         SettingsService.shared.setLLMModel(normalizedModel)
         SettingsService.shared.setLLMBaseURL(normalizedBaseURL)

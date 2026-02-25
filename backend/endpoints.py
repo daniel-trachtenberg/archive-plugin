@@ -47,6 +47,7 @@ IMAGE_EXTENSIONS = (
 class DirectoryConfig(BaseModel):
     input_dir: str
     archive_dir: str
+    watch_input_dir: bool = True
 
 
 class LLMConfig(BaseModel):
@@ -265,7 +266,11 @@ async def get_directories():
     """
     Get the current input and archive directories.
     """
-    return {"input_dir": settings.INPUT_DIR, "archive_dir": settings.ARCHIVE_DIR}
+    return {
+        "input_dir": settings.INPUT_DIR,
+        "archive_dir": settings.ARCHIVE_DIR,
+        "watch_input_dir": settings.WATCH_INPUT_DIR,
+    }
 
 
 # Helper function to update .env file
@@ -328,6 +333,7 @@ async def update_directories(config: DirectoryConfig):
         # Update settings
         settings.INPUT_DIR = str(input_path)
         settings.ARCHIVE_DIR = str(archive_path)
+        settings.WATCH_INPUT_DIR = bool(config.watch_input_dir)
 
         # Also update ChromaDB directory which is based on archive directory
         settings.CHROMA_DB_DIR = os.path.join(settings.ARCHIVE_DIR, ".chromadb")
@@ -338,6 +344,7 @@ async def update_directories(config: DirectoryConfig):
             {
                 "ARCHIVE_DIR": str(archive_path),
                 "INPUT_DIR": str(input_path),
+                "WATCH_INPUT_DIR": str(settings.WATCH_INPUT_DIR).lower(),
             }
         )
 
@@ -347,7 +354,11 @@ async def update_directories(config: DirectoryConfig):
         # Restart the file watcher with new directory settings
         restart_file_watcher()
 
-        return {"input_dir": settings.INPUT_DIR, "archive_dir": settings.ARCHIVE_DIR}
+        return {
+            "input_dir": settings.INPUT_DIR,
+            "archive_dir": settings.ARCHIVE_DIR,
+            "watch_input_dir": settings.WATCH_INPUT_DIR,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to update directories: {str(e)}"
