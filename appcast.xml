@@ -6,6 +6,12 @@
     <description>Latest updates for ArchiveMac.</description>
     <language>en</language>
     <item>
+      <title>Version 1.0.2</title>
+      <pubDate>Wed, 25 Feb 2026 23:42:41 +0000</pubDate>
+      <enclosure url="https://github.com/daniel-trachtenberg/archive-plugin/releases/download/v1.0.2/ArchiveMac-1.0.dmg" sparkle:version="3" sparkle:shortVersionString="1.0.2" sparkle:edSignature="ly4G9zoXv5rkiOtxbKnLJ6xY9/9mNyDJ0eooThsXWw9CRV/gHqJXiNgcCYKxe3roZ+nByKj2ps2ZNnYrTkTBAA==" length="222899344" type="application/octet-stream" />
+      <sparkle:releaseNotesLink>https://github.com/daniel-trachtenberg/archive-plugin/releases/tag/v1.0.2</sparkle:releaseNotesLink>
+    </item>
+    <item>
       <title>Version 1.0.1</title>
       <pubDate>Wed, 25 Feb 2026 22:38:25 +0000</pubDate>
       <enclosure url="https://github.com/daniel-trachtenberg/archive-plugin/releases/download/v1.0.1/ArchiveMac-1.0.dmg" sparkle:version="2" sparkle:shortVersionString="1.0.1" sparkle:edSignature="NwWxJveC1Bb59aVdKJ+HIJmvYp0RkRVmkgjEWq8K5W/CYmBybZnh0qSmDlt+0QmPByUJZ3mUuKrkNMar8OVfDQ==" length="221864194" type="application/octet-stream" />
