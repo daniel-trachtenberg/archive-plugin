@@ -370,6 +370,7 @@ struct SettingsView: View {
                                 showUninstallConfirmation = true
                             }
                             .buttonStyle(.borderedProminent)
+                            .tint(.red)
                             .controlSize(.small)
                         }
 
