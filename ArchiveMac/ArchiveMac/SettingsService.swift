@@ -104,6 +104,7 @@ final class SettingsService {
     private let llmModelKey = "llmModel"
     private let llmBaseURLKey = "llmBaseURL"
     private let onboardingCompletedKey = "onboardingCompleted"
+    private let onboardingVersionKey = "onboardingVersion"
     private let searchShortcutKey = "searchShortcut"
     private let uploadShortcutKey = "uploadShortcut"
     private let settingsShortcutKey = "settingsShortcut"
@@ -125,6 +126,9 @@ final class SettingsService {
         .urls(for: .desktopDirectory, in: .userDomainMask)
         .first!
         .path
+
+    // Bump this when onboarding content changes and should be shown once again.
+    private let currentOnboardingVersion = 1
 
     private init() {
         runMigrationsIfNeeded()
@@ -440,7 +444,23 @@ final class SettingsService {
     }
 
     func setOnboardingCompleted(_ completed: Bool) {
-        UserDefaults.standard.set(completed, forKey: onboardingCompletedKey)
+        let defaults = UserDefaults.standard
+        defaults.set(completed, forKey: onboardingCompletedKey)
+
+        if completed {
+            defaults.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        }
+    }
+
+    func shouldPresentOnboardingOnLaunch() -> Bool {
+        let defaults = UserDefaults.standard
+        let seenVersion = defaults.integer(forKey: onboardingVersionKey)
+
+        if seenVersion < currentOnboardingVersion {
+            return true
+        }
+
+        return !defaults.bool(forKey: onboardingCompletedKey)
     }
 
     func getShortcut(for action: ShortcutAction) -> ShortcutDefinition {

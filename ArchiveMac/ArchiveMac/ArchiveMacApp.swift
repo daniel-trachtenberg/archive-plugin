@@ -77,6 +77,7 @@ struct ArchiveMacApp: App {
     private static var hasScheduledOnboarding = false
     private static var hasConfiguredBackendLifecycle = false
     private static var backendTerminationObserver: NSObjectProtocol?
+    private static var launchObserver: NSObjectProtocol?
 
     // Menu constants
     private let menuWidth: CGFloat = 150
@@ -94,13 +95,17 @@ struct ArchiveMacApp: App {
             ) { _ in
                 BackendService.shared.stopManagedBackend()
             }
-        }
 
-        if !Self.hasScheduledOnboarding, !SettingsService.shared.hasCompletedOnboarding() {
-            Self.hasScheduledOnboarding = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                let onboardingView = OnboardingView()
-                OnboardingWindowManager.shared.show(with: onboardingView)
+            Self.launchObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didFinishLaunchingNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Self.scheduleOnboardingIfNeeded()
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                Self.scheduleOnboardingIfNeeded()
             }
         }
     }
@@ -226,6 +231,23 @@ struct ArchiveMacApp: App {
                     UpdateService.shared.presentErrorAlert(error)
                 }
             }
+        }
+    }
+
+    private static func scheduleOnboardingIfNeeded() {
+        guard !hasScheduledOnboarding else {
+            return
+        }
+
+        guard SettingsService.shared.shouldPresentOnboardingOnLaunch() else {
+            return
+        }
+
+        hasScheduledOnboarding = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            let onboardingView = OnboardingView()
+            OnboardingWindowManager.shared.show(with: onboardingView)
         }
     }
 }
