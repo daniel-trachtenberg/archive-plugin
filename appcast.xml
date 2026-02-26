@@ -7,8 +7,8 @@
     <language>en</language>
     <item>
       <title>Version 1.0.3</title>
-      <pubDate>Thu, 26 Feb 2026 02:16:50 +0000</pubDate>
-      <enclosure url="https://github.com/daniel-trachtenberg/archive-plugin/releases/download/v1.0.3/ArchiveMac-1.0.3.dmg" sparkle:version="4" sparkle:shortVersionString="1.0.3" sparkle:edSignature="gvUURZB9I6QoDybgsw5YoGu4PigNaoeLW4wJJn8on4rDblb2cqSlGEQXbUU59RHfMBiKgU3MHhGhQIkIBzjoCg==" length="222745862" type="application/octet-stream" />
+      <pubDate>Thu, 26 Feb 2026 02:25:30 +0000</pubDate>
+      <enclosure url="https://github.com/daniel-trachtenberg/archive-plugin/releases/download/v1.0.3/ArchiveMac-1.0.dmg" sparkle:version="4" sparkle:shortVersionString="1.0.3" sparkle:edSignature="3CBtum6QlfUegyDDcASmNFh1XF+7QqgftamCkvQat8CoiMwoIJ8kKFtiLNUmuDH2m6GiBlKA2yQGCgcXQ/x9Cw==" length="222901128" type="application/octet-stream" />
       <sparkle:releaseNotesLink>https://github.com/daniel-trachtenberg/archive-plugin/releases/tag/v1.0.3</sparkle:releaseNotesLink>
     </item>
     <item>
