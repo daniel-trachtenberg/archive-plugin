@@ -813,6 +813,8 @@ struct SettingsView: View {
                     maskedAPIKey = SettingsService.shared.getStoredMaskedAPIKey(for: llmProvider)
                     isSaving = false
                     saveSuccess = true
+                    isSettingsViewShowing = false
+                    SettingsWindowManager.shared.hide()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         saveSuccess = false
                     }
