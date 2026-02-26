@@ -79,6 +79,53 @@ _KEYWORD_CATEGORIES = {
     "personal": ["resume", "cv", "cover letter", "family", "personal", "photo", "journal"],
 }
 
+_GENERIC_ROOT_SEGMENTS = {
+    "documents",
+    "document",
+    "files",
+    "file",
+    "misc",
+    "miscellaneous",
+    "other",
+    "general",
+    "unsorted",
+}
+
+_DOMAIN_ALIASES = {
+    "finance": {"finance", "financial", "money", "billing", "tax"},
+    "legal": {"legal", "contracts", "compliance", "law"},
+    "work": {"work", "business", "project", "projects", "client"},
+    "education": {"education", "school", "course", "class", "university", "study"},
+    "health": {"health", "medical", "care", "insurance"},
+    "travel": {"travel", "trip", "flights", "hotel", "itinerary"},
+    "personal": {"personal", "home", "family"},
+}
+
+_TOKEN_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "about",
+    "file",
+    "files",
+    "document",
+    "documents",
+    "image",
+    "images",
+    "folder",
+    "folders",
+    "archive",
+}
+
+_TREE_LINE_PATTERN = re.compile(
+    r"^(?P<prefix>(?:\|   |    )*)(?:\|-- |`-- )(?P<name>.+)$"
+)
+
 
 class LLMService:
     SYSTEM_PROMPT = """
@@ -359,6 +406,182 @@ def _normalize_path(path: str) -> str:
     return "/".join(cleaned_parts)
 
 
+def _is_generic_root(path: str) -> bool:
+    normalized = _normalize_path(path)
+    if not normalized:
+        return True
+    first_segment = normalized.split("/", 1)[0].lower()
+    return first_segment in _GENERIC_ROOT_SEGMENTS
+
+
+def _strip_generic_root(path: str) -> str:
+    normalized = _normalize_path(path)
+    if not normalized:
+        return ""
+
+    parts = normalized.split("/")
+    if len(parts) >= 2 and parts[0].lower() in _GENERIC_ROOT_SEGMENTS:
+        return "/".join(parts[1:])
+    return normalized
+
+
+def _tokenize_for_matching(text: str) -> set[str]:
+    if not text:
+        return set()
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    tokens = re.findall(r"[a-z0-9]+", spaced.lower())
+    return {
+        token
+        for token in tokens
+        if len(token) >= 3 and token not in _TOKEN_STOPWORDS and not token.isdigit()
+    }
+
+
+def _parse_directory_context_payload(directory_structure: str) -> dict:
+    context_text = str(directory_structure or "").strip()
+    if not context_text:
+        return {}
+
+    try:
+        decoded = json.loads(context_text)
+        if isinstance(decoded, dict):
+            return decoded
+    except Exception:
+        pass
+
+    # Fallback for contexts wrapped in additional text.
+    json_match = _JSON_BLOCK_PATTERN.search(context_text)
+    if json_match:
+        try:
+            decoded = json.loads(json_match.group(0))
+            if isinstance(decoded, dict):
+                return decoded
+        except Exception:
+            pass
+
+    return {}
+
+
+def _add_directory_prefixes(path: str, accumulator: set[str]) -> None:
+    normalized = _normalize_path(path)
+    if not normalized:
+        return
+
+    parts = normalized.split("/")
+    for idx in range(1, min(len(parts), 3) + 1):
+        candidate = "/".join(parts[:idx])
+        if candidate:
+            accumulator.add(candidate)
+
+
+def _extract_existing_directories(directory_structure: str) -> list[str]:
+    payload = _parse_directory_context_payload(directory_structure)
+    if not payload:
+        return []
+
+    directories: set[str] = set()
+
+    for key in ("archive_files", "unindexed_archive_files", "indexed_files"):
+        entries = payload.get(key, [])
+        if not isinstance(entries, list):
+            continue
+
+        for entry in entries:
+            if not isinstance(entry, str):
+                continue
+            candidate = entry.replace("\\", "/").strip().strip("/")
+            if not candidate or candidate.startswith("... ("):
+                continue
+
+            parent = os.path.dirname(candidate).replace("\\", "/").strip("/")
+            if parent:
+                _add_directory_prefixes(parent, directories)
+
+    tree = payload.get("archive_tree")
+    if isinstance(tree, str) and tree:
+        stack: list[str] = []
+        for line in tree.splitlines():
+            match = _TREE_LINE_PATTERN.match(line.rstrip())
+            if not match:
+                continue
+
+            raw_name = match.group("name").strip()
+            if not raw_name.endswith("/"):
+                continue
+
+            depth = len(match.group("prefix")) // 4
+            folder_name = raw_name[:-1].strip()
+            if not folder_name:
+                continue
+
+            stack = stack[:depth]
+            stack.append(folder_name)
+            _add_directory_prefixes("/".join(stack), directories)
+
+    return sorted(directories)
+
+
+def _score_directory_candidate(
+    candidate: str,
+    summary_tokens: set[str],
+    filename_tokens: set[str],
+) -> float:
+    candidate_tokens = _tokenize_for_matching(candidate.replace("/", " "))
+    if not candidate_tokens:
+        return -1.0
+
+    summary_overlap = len(candidate_tokens & summary_tokens)
+    filename_overlap = len(candidate_tokens & filename_tokens)
+
+    score = (summary_overlap * 2.0) + (filename_overlap * 3.0)
+    if not _is_generic_root(candidate):
+        score += 0.6
+
+    generic_segments = sum(
+        1 for segment in candidate.split("/") if segment.lower() in _GENERIC_ROOT_SEGMENTS
+    )
+    score -= float(generic_segments)
+    score += min(len(candidate.split("/")), 3) * 0.1
+
+    return score
+
+
+def _best_existing_path_from_context(
+    filename: str,
+    summary: str,
+    directory_structure: str,
+) -> str:
+    existing_dirs = _extract_existing_directories(directory_structure)
+    if not existing_dirs:
+        return ""
+
+    filename_base = os.path.splitext(os.path.basename(filename or ""))[0]
+    summary_tokens = _tokenize_for_matching(summary)
+    filename_tokens = _tokenize_for_matching(filename_base)
+
+    domain = (_domain_from_text(summary) or "").lower()
+    if domain:
+        summary_tokens.add(domain)
+        summary_tokens |= _DOMAIN_ALIASES.get(domain, set())
+
+    if not summary_tokens and not filename_tokens:
+        return ""
+
+    scored = [
+        (
+            _score_directory_candidate(candidate, summary_tokens, filename_tokens),
+            candidate,
+        )
+        for candidate in existing_dirs
+    ]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_candidate = scored[0]
+
+    if best_score < 1.5:
+        return ""
+    return best_candidate
+
+
 def _guess_media_type(filename: str) -> str:
     ext = os.path.splitext(filename.lower())[1]
     return {
@@ -379,23 +602,35 @@ def _domain_from_text(summary: str) -> Optional[str]:
     return None
 
 
-def _fallback_path(filename: str, summary: str = "") -> str:
+def _fallback_path(filename: str, summary: str = "", directory_structure: str = "") -> str:
     ext = os.path.splitext(filename.lower())[1]
     domain = _domain_from_text(summary)
+    existing_context_path = _best_existing_path_from_context(
+        filename=filename,
+        summary=summary,
+        directory_structure=directory_structure,
+    )
+    if existing_context_path:
+        return existing_context_path
+
+    if domain:
+        normalized_domain = _normalize_path(domain)
+        if normalized_domain:
+            return normalized_domain
 
     if ext in _IMAGE_EXTENSIONS:
-        return f"Images/{domain}" if domain else "Images"
+        return "Images"
     if ext in _AUDIO_EXTENSIONS:
-        return f"Audio/{domain}" if domain else "Audio"
+        return "Audio"
     if ext in _VIDEO_EXTENSIONS:
-        return f"Video/{domain}" if domain else "Video"
+        return "Video"
     if ext in _ARCHIVE_EXTENSIONS:
         return "Archives"
     if ext in _CODE_EXTENSIONS:
-        return f"Code/{domain}" if domain else "Code"
+        return "Code"
     if ext in _TEXT_EXTENSIONS:
-        return f"Documents/{domain}" if domain else "Documents"
-    return f"Files/{domain}" if domain else "Files"
+        return "Inbox"
+    return "Inbox"
 
 
 def _safe_summary_fallback(filename: str, content: str) -> str:
@@ -476,8 +711,9 @@ Return JSON only: {{"path": "Top/Sub"}}
 Constraints:
 - No filename in the path.
 - Max depth: 3 segments.
-- Use generic category names when uncertain.
 - Prefer existing folder patterns from the provided context.
+- Prefer topical folders over file-type buckets (for example, `Taxes/2025` not `Documents/Taxes`).
+- Avoid starting paths with generic roots like `Documents` or `Files` unless there is no clearer topic.
 - The context includes filesystem tree + index status. Files in `unindexed_archive_files`
   are on disk but not yet embedded; files in `db_only_index_records` are stale DB records.
 
@@ -489,11 +725,24 @@ Constraints:
     raw = _call_model(prompt, timeout=45, num_predict=80)
     extracted = _extract_path_from_response(raw)
     normalized = _normalize_path(extracted)
+    normalized = _strip_generic_root(normalized)
+
+    existing_context_path = _best_existing_path_from_context(
+        filename=filename,
+        summary=summary,
+        directory_structure=directory_structure,
+    )
+
+    if normalized and not _is_generic_root(normalized):
+        return normalized
+
+    if existing_context_path:
+        return existing_context_path
 
     if normalized:
         return normalized
 
-    return _fallback_path(filename, summary)
+    return _fallback_path(filename, summary, directory_structure)
 
 
 async def get_path_suggestion(filename: str, content: str, directory_structure: str) -> str:
