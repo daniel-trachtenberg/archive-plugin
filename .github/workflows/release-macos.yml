@@ -11,9 +11,6 @@ jobs:
     permissions:
       contents: write
 
-    env:
-      NOTARY_PROFILE: archive-notary
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,16 +21,12 @@ jobs:
           python-version: "3.11"
 
       - name: Prepare signing keychain
+        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' }}
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-
-          if [[ -z "${MACOS_CERTIFICATE_P12_BASE64}" || -z "${MACOS_CERTIFICATE_PASSWORD}" ]]; then
-            echo "Missing signing certificate secrets." >&2
-            exit 1
-          fi
 
           KEYCHAIN_PATH="$RUNNER_TEMP/archive-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
@@ -62,17 +55,14 @@ jobs:
           security default-keychain -d user -s "$KEYCHAIN_PATH"
 
       - name: Store notarytool credentials
+        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-
-          if [[ -z "${APPLE_ID}" || -z "${APPLE_TEAM_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" ]]; then
-            echo "Missing notarization secrets." >&2
-            exit 1
-          fi
+          NOTARY_PROFILE="archive-notary"
 
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
             --apple-id "$APPLE_ID" \
@@ -80,22 +70,37 @@ jobs:
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --keychain "$KEYCHAIN_PATH"
 
-      - name: Build, sign, notarize, and package
+      - name: Build, package, and optionally sign/notarize
         env:
           SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          NOTARY_CREDS_PRESENT: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${SIGNING_IDENTITY}" ]]; then
-            echo "Missing MACOS_SIGNING_IDENTITY secret." >&2
-            exit 1
+          EFFECTIVE_SIGNING_IDENTITY=""
+          if [[ -n "${SIGNING_IDENTITY:-}" && -n "${KEYCHAIN_PATH:-}" ]]; then
+            EFFECTIVE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+          fi
+
+          NOTARY_PROFILE=""
+          NOTARY_KEYCHAIN_PATH_VALUE=""
+          if [[ -n "$EFFECTIVE_SIGNING_IDENTITY" && "${NOTARY_CREDS_PRESENT}" == "true" && -n "${KEYCHAIN_PATH:-}" ]]; then
+            NOTARY_PROFILE="archive-notary"
+            NOTARY_KEYCHAIN_PATH_VALUE="$KEYCHAIN_PATH"
+          fi
+
+          if [[ -z "$EFFECTIVE_SIGNING_IDENTITY" ]]; then
+            echo "Signing disabled (missing identity or certificate). Building unsigned release."
+          fi
+          if [[ -z "$NOTARY_PROFILE" ]]; then
+            echo "Notarization disabled (missing signed build or notarization credentials)."
           fi
 
           PREPARE_BACKEND_RUNTIME=1 \
           BACKEND_RUNTIME_PYTHON=python3 \
-          SIGNING_IDENTITY="$SIGNING_IDENTITY" \
+          SIGNING_IDENTITY="$EFFECTIVE_SIGNING_IDENTITY" \
           NOTARY_PROFILE="$NOTARY_PROFILE" \
-          NOTARY_KEYCHAIN_PATH="$KEYCHAIN_PATH" \
+          NOTARY_KEYCHAIN_PATH="$NOTARY_KEYCHAIN_PATH_VALUE" \
           ./scripts/release_macos.sh
 
       - name: Upload build artifacts
