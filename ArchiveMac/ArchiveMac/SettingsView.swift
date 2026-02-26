@@ -561,8 +561,7 @@ struct SettingsView: View {
             Text(title)
                 .frame(width: folderLabelWidth, alignment: .leading)
                 .foregroundColor(.secondary)
-            TextField("", text: path)
-                .textFieldStyle(.roundedBorder)
+            FixedLTRTextField(text: path, placeholder: "Folder path")
                 .frame(width: folderPathFieldWidth)
             Button("Browse") {
                 selectFolderPath(isInput: isInput)
