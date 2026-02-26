@@ -421,13 +421,8 @@
 				DEVELOPMENT_TEAM = L3GSBDXS8N;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUAllowsAutomaticUpdates = YES;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
-				INFOPLIST_KEY_SUFeedURL = "https://raw.githubusercontent.com/daniel-trachtenberg/archive-plugin/main/appcast.xml";
-				INFOPLIST_KEY_SUPublicEDKey = "v8YKcfvEeCyPmHp3mjn+Rx/7lqLK01zI2E3bLi7Biyg=";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ArchiveMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -457,13 +452,8 @@
 				DEVELOPMENT_TEAM = L3GSBDXS8N;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUAllowsAutomaticUpdates = YES;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
-				INFOPLIST_KEY_SUFeedURL = "https://raw.githubusercontent.com/daniel-trachtenberg/archive-plugin/main/appcast.xml";
-				INFOPLIST_KEY_SUPublicEDKey = "v8YKcfvEeCyPmHp3mjn+Rx/7lqLK01zI2E3bLi7Biyg=";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ArchiveMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

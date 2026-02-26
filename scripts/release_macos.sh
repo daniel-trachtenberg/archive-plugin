@@ -126,6 +126,17 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+
+if [[ "$SPARKLE_ENABLED" == "1" ]]; then
+  for required_key in SUFeedURL SUPublicEDKey; do
+    if ! /usr/libexec/PlistBuddy -c "Print :$required_key" "$APP_PATH/Contents/Info.plist" >/dev/null 2>&1; then
+      echo "ERROR: Missing Sparkle Info.plist key '$required_key' in $APP_PATH/Contents/Info.plist" >&2
+      echo "Set Sparkle metadata in the app Info.plist before publishing." >&2
+      exit 1
+    fi
+  done
+fi
+
 DMG_PATH="${DMG_PATH:-$DIST_DIR/ArchiveMac-${VERSION}.dmg}"
 DMG_STAGING_DIR="$DIST_DIR/dmg-staging"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-Archive Plugin}"
