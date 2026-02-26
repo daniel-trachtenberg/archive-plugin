@@ -1,5 +1,6 @@
 import SwiftUI
 import HotKey
+import AppKit
 
 private final class HotkeyBridge: ObservableObject {
     @Published var searchKeyboardShortcut: KeyboardShortcut
@@ -8,17 +9,19 @@ private final class HotkeyBridge: ObservableObject {
 
     @Published var searchSignal: Int = 0
     @Published var uploadSignal: Int = 0
+    @Published var settingsSignal: Int = 0
 
     private var searchHotkey: HotKey?
     private var uploadHotkey: HotKey?
+    private var settingsHotkey: HotKey?
     private var shortcutsObserver: NSObjectProtocol?
+    private var launchObserver: NSObjectProtocol?
+    private var becameActiveObserver: NSObjectProtocol?
 
     init() {
         searchKeyboardShortcut = SettingsService.shared.getShortcut(for: .search).keyboardShortcut
         uploadKeyboardShortcut = SettingsService.shared.getShortcut(for: .upload).keyboardShortcut
         settingsKeyboardShortcut = SettingsService.shared.getShortcut(for: .settings).keyboardShortcut
-
-        reloadShortcutsAndHotkeys()
 
         shortcutsObserver = NotificationCenter.default.addObserver(
             forName: .archiveShortcutsDidChange,
@@ -27,11 +30,45 @@ private final class HotkeyBridge: ObservableObject {
         ) { [weak self] _ in
             self?.reloadShortcutsAndHotkeys()
         }
+
+        launchObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshHotkeysAfterLaunch()
+        }
+
+        becameActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadShortcutsAndHotkeys()
+        }
+
+        refreshHotkeysAfterLaunch()
     }
 
     deinit {
         if let shortcutsObserver {
             NotificationCenter.default.removeObserver(shortcutsObserver)
+        }
+        if let launchObserver {
+            NotificationCenter.default.removeObserver(launchObserver)
+        }
+        if let becameActiveObserver {
+            NotificationCenter.default.removeObserver(becameActiveObserver)
+        }
+    }
+
+    private func refreshHotkeysAfterLaunch() {
+        DispatchQueue.main.async { [weak self] in
+            self?.reloadShortcutsAndHotkeys()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.reloadShortcutsAndHotkeys()
         }
     }
 
@@ -44,10 +81,18 @@ private final class HotkeyBridge: ObservableObject {
         uploadKeyboardShortcut = uploadShortcut.keyboardShortcut
         settingsKeyboardShortcut = settingsShortcut.keyboardShortcut
 
-        configureGlobalHotKeys(searchShortcut: searchShortcut, uploadShortcut: uploadShortcut)
+        configureGlobalHotKeys(
+            searchShortcut: searchShortcut,
+            uploadShortcut: uploadShortcut,
+            settingsShortcut: settingsShortcut
+        )
     }
 
-    private func configureGlobalHotKeys(searchShortcut: ShortcutDefinition, uploadShortcut: ShortcutDefinition) {
+    private func configureGlobalHotKeys(
+        searchShortcut: ShortcutDefinition,
+        uploadShortcut: ShortcutDefinition,
+        settingsShortcut: ShortcutDefinition
+    ) {
         searchHotkey = searchShortcut.makeHotKey()
         searchHotkey?.keyDownHandler = { [weak self] in
             DispatchQueue.main.async {
@@ -59,6 +104,13 @@ private final class HotkeyBridge: ObservableObject {
         uploadHotkey?.keyDownHandler = { [weak self] in
             DispatchQueue.main.async {
                 self?.uploadSignal += 1
+            }
+        }
+
+        settingsHotkey = settingsShortcut.makeHotKey()
+        settingsHotkey?.keyDownHandler = { [weak self] in
+            DispatchQueue.main.async {
+                self?.settingsSignal += 1
             }
         }
     }
@@ -168,6 +220,10 @@ struct ArchiveMacApp: App {
         }
         .onChange(of: hotkeyBridge.uploadSignal) { _, _ in
             uploadFiles()
+        }
+        .onChange(of: hotkeyBridge.settingsSignal) { _, _ in
+            isSettingsViewShowing = true
+            showSettingsWindow()
         }
     }
 
