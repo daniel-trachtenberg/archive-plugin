@@ -124,7 +124,7 @@ struct SettingsView: View {
 
     private let customModelToken = "__custom_model__"
     private let folderLabelWidth: CGFloat = 56
-    private let folderPathFieldWidth: CGFloat = 440
+    private let folderPathFieldWidth: CGFloat = 430
     private let folderBrowseButtonWidth: CGFloat = 72
 
     private let openAIModelOptions: [String] = [
@@ -561,8 +561,12 @@ struct SettingsView: View {
             Text(title)
                 .frame(width: folderLabelWidth, alignment: .leading)
                 .foregroundColor(.secondary)
-            FixedLTRTextField(text: path, placeholder: "Folder path")
-                .frame(width: folderPathFieldWidth)
+
+            TextField("", text: path)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
+                .frame(width: folderPathFieldWidth, alignment: .leading)
+
             Button("Browse") {
                 selectFolderPath(isInput: isInput)
             }
