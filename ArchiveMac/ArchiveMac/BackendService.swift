@@ -7,9 +7,13 @@ final class BackendService {
     private var process: Process?
     private var logPipe: Pipe?
     private var isStarting = false
+    private var monitorTimer: DispatchSourceTimer?
+    private var unhealthyRunningChecks = 0
 
     private let host: String
     private let port: Int
+    private let monitorIntervalSeconds: TimeInterval = 15
+    private let maxUnhealthyRunningChecksBeforeRestart = 3
 
     private init() {
         host = BackendService.resolveHost()
@@ -30,6 +34,18 @@ final class BackendService {
         }
     }
 
+    func startLifecycleMonitoring() {
+        queue.async { [weak self] in
+            self?.startLifecycleMonitoringSync()
+        }
+    }
+
+    func stopLifecycleMonitoring() {
+        queue.async { [weak self] in
+            self?.stopLifecycleMonitoringSync()
+        }
+    }
+
     func stopManagedBackend() {
         queue.async { [weak self] in
             self?.stopManagedBackendSync()
@@ -38,13 +54,21 @@ final class BackendService {
 
     private func startIfNeededSync() {
         if isBackendHealthy(timeout: 1.0) {
-            log("Detected healthy backend at \(baseURLString).")
+            unhealthyRunningChecks = 0
             return
         }
 
-        guard process?.isRunning != true else {
-            log("Backend process is already running.")
-            return
+        if process?.isRunning == true {
+            unhealthyRunningChecks += 1
+
+            if unhealthyRunningChecks >= maxUnhealthyRunningChecksBeforeRestart {
+                log("Managed backend is running but unhealthy. Restarting process.")
+                stopManagedBackendSync()
+                unhealthyRunningChecks = 0
+            } else {
+                log("Managed backend is running but not healthy (\(unhealthyRunningChecks)/\(maxUnhealthyRunningChecksBeforeRestart)).")
+                return
+            }
         }
 
         guard !isStarting else {
@@ -52,6 +76,7 @@ final class BackendService {
         }
         isStarting = true
         defer { isStarting = false }
+        unhealthyRunningChecks = 0
 
         guard let backendDirectory = locateBackendDirectory() else {
             log("Could not find backend directory. Set ARCHIVE_BACKEND_DIR or bundle backend resources.")
@@ -85,7 +110,32 @@ final class BackendService {
         process.terminate()
         self.process = nil
         self.logPipe = nil
+        unhealthyRunningChecks = 0
         log("Stopped managed backend process.")
+    }
+
+    private func startLifecycleMonitoringSync() {
+        guard monitorTimer == nil else {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(
+            deadline: .now() + 1.0,
+            repeating: .milliseconds(Int(monitorIntervalSeconds * 1000))
+        )
+        timer.setEventHandler { [weak self] in
+            self?.startIfNeededSync()
+        }
+        monitorTimer = timer
+        timer.resume()
+
+        startIfNeededSync()
+    }
+
+    private func stopLifecycleMonitoringSync() {
+        monitorTimer?.cancel()
+        monitorTimer = nil
     }
 
     private func launchBackendProcess(backendDirectory: URL) throws {
@@ -131,6 +181,14 @@ final class BackendService {
                 self?.process = nil
                 self?.logPipe = nil
                 self?.log("Backend process exited (status \(exitedProcess.terminationStatus)).")
+
+                guard self?.monitorTimer != nil else {
+                    return
+                }
+
+                self?.queue.asyncAfter(deadline: .now() + 1.0) {
+                    self?.startIfNeededSync()
+                }
             }
         }
 

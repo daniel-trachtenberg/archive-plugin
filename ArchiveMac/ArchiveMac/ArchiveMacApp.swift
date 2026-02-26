@@ -195,6 +195,10 @@ struct ArchiveMacApp: App {
     private static var hasConfiguredBackendLifecycle = false
     private static var backendTerminationObserver: NSObjectProtocol?
     private static var launchObserver: NSObjectProtocol?
+    private static var becameActiveObserver: NSObjectProtocol?
+    private static var wakeObserver: NSObjectProtocol?
+    private static var sessionActiveObserver: NSObjectProtocol?
+    private static var startupRetryWorkItems: [DispatchWorkItem] = []
 
     // Menu constants
     private let menuWidth: CGFloat = 150
@@ -203,13 +207,17 @@ struct ArchiveMacApp: App {
     init() {
         if !Self.hasConfiguredBackendLifecycle {
             Self.hasConfiguredBackendLifecycle = true
-            BackendService.shared.startIfNeeded()
+            BackendService.shared.startLifecycleMonitoring()
+            Self.scheduleBackendStartupRefreshes()
 
             Self.backendTerminationObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification,
                 object: nil,
                 queue: .main
             ) { _ in
+                Self.startupRetryWorkItems.forEach { $0.cancel() }
+                Self.startupRetryWorkItems.removeAll()
+                BackendService.shared.stopLifecycleMonitoring()
                 BackendService.shared.stopManagedBackend()
             }
 
@@ -218,10 +226,36 @@ struct ArchiveMacApp: App {
                 object: nil,
                 queue: .main
             ) { _ in
+                Self.scheduleBackendStartupRefreshes()
                 Self.scheduleOnboardingIfNeeded()
             }
 
+            Self.becameActiveObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                BackendService.shared.startIfNeeded()
+            }
+
+            Self.wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                BackendService.shared.startIfNeeded()
+            }
+
+            Self.sessionActiveObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.sessionDidBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                BackendService.shared.startIfNeeded()
+            }
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                Self.scheduleBackendStartupRefreshes()
                 Self.scheduleOnboardingIfNeeded()
             }
         }
@@ -336,6 +370,22 @@ struct ArchiveMacApp: App {
 
     private func checkForUpdatesFromMenu() {
         sparkleUpdater.checkForUpdates()
+    }
+
+    private static func scheduleBackendStartupRefreshes() {
+        startupRetryWorkItems.forEach { $0.cancel() }
+        startupRetryWorkItems.removeAll()
+
+        BackendService.shared.startIfNeeded()
+
+        let retryDelays: [TimeInterval] = [0.8, 2.0, 5.0, 12.0]
+        for delay in retryDelays {
+            let retryItem = DispatchWorkItem {
+                BackendService.shared.startIfNeeded()
+            }
+            startupRetryWorkItems.append(retryItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retryItem)
+        }
     }
 
     private static func scheduleOnboardingIfNeeded() {

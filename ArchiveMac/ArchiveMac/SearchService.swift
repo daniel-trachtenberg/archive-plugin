@@ -18,6 +18,8 @@ class SearchService {
     
     // Modern async/await version
     func searchAsync(query: String) async -> [SearchResult] {
+        BackendService.shared.startIfNeeded()
+
         guard !query.isEmpty else {
             return []
         }
