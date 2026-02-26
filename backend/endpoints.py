@@ -12,9 +12,12 @@ import services.move_log_service as move_logs
 import utils
 import os
 import shutil
+import re
+import time
 from config import settings
 from pathlib import Path
 from pydantic import BaseModel
+from difflib import SequenceMatcher
 
 router = APIRouter()
 
@@ -41,6 +44,83 @@ IMAGE_EXTENSIONS = (
     ".heic",
     ".heif",
 )
+
+PREFERRED_USER_FILE_EXTENSIONS = {
+    "pdf",
+    "txt",
+    "md",
+    "rtf",
+    "doc",
+    "docx",
+    "ppt",
+    "pptx",
+    "xls",
+    "xlsx",
+    "csv",
+    "pages",
+    "numbers",
+    "key",
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "heic",
+    "heif",
+}
+
+CODE_FILE_EXTENSIONS = {
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "py",
+    "java",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "hpp",
+    "go",
+    "rs",
+    "swift",
+    "kt",
+    "rb",
+    "php",
+    "html",
+    "css",
+    "scss",
+    "json",
+    "yml",
+    "yaml",
+    "xml",
+    "sh",
+    "bash",
+    "zsh",
+    "sql",
+}
+
+CODE_QUERY_HINTS = {
+    "code",
+    "script",
+    "function",
+    "class",
+    "python",
+    "javascript",
+    "typescript",
+    "html",
+    "css",
+    "json",
+    "yaml",
+    "xml",
+    "sql",
+    "api",
+    "backend",
+    "frontend",
+}
+
+_INDEXED_PATH_CACHE = {"paths": [], "created_at": 0.0}
+_INDEXED_PATH_CACHE_TTL_SECONDS = 8
 
 
 # New model for directory configuration
@@ -155,6 +235,161 @@ def _remove_path(path: Path, deleted_paths: list[str], warnings: list[str]) -> N
         warnings.append(f"Failed to remove {path}: {exc}")
 
 
+def _search_tokens(text: str) -> list[str]:
+    return [token for token in re.split(r"[^a-z0-9]+", text.lower()) if len(token) >= 2]
+
+
+def _semantic_score(distance) -> float:
+    if distance is None:
+        return 0.0
+    try:
+        normalized = max(float(distance), 0.0)
+        return 1.0 / (1.0 + normalized)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _query_prefers_code(tokens: list[str], normalized_query: str) -> bool:
+    if any(token in CODE_QUERY_HINTS or token in CODE_FILE_EXTENSIONS for token in tokens):
+        return True
+    return normalized_query in CODE_FILE_EXTENSIONS
+
+
+def _file_type_priority_score(extension: str, query_tokens: list[str], prefers_code: bool) -> float:
+    if extension in query_tokens:
+        return 1.2
+    if extension in PREFERRED_USER_FILE_EXTENSIONS:
+        return 1.0
+    if extension in CODE_FILE_EXTENSIONS:
+        return 0.2 if prefers_code else -0.9
+    if not extension:
+        return -0.2
+    return 0.1
+
+
+def _filename_match_score(relative_path: str, query: str, query_tokens: list[str]) -> float:
+    path = Path(relative_path)
+    filename = path.name.lower()
+    stem = path.stem.lower()
+    path_text = relative_path.lower()
+    score = 0.0
+
+    if query:
+        if stem == query or filename == query:
+            score += 2.8
+        elif stem.startswith(query):
+            score += 2.1
+        elif query in stem:
+            score += 1.5
+        elif query in path_text:
+            score += 0.8
+
+        score += SequenceMatcher(None, query, stem).ratio() * 0.8
+
+    stem_tokens = set(_search_tokens(stem))
+    for token in query_tokens:
+        if token in stem_tokens:
+            score += 0.9
+        elif token in stem:
+            score += 0.45
+        elif token in path_text:
+            score += 0.2
+
+    return score
+
+
+def _cached_indexed_paths() -> list[str]:
+    now = time.monotonic()
+    if (
+        _INDEXED_PATH_CACHE["paths"]
+        and now - _INDEXED_PATH_CACHE["created_at"] <= _INDEXED_PATH_CACHE_TTL_SECONDS
+    ):
+        return _INDEXED_PATH_CACHE["paths"]
+
+    indexed_paths = sorted(chroma.list_indexed_paths())
+    if not indexed_paths:
+        indexed_paths = filesystem.list_archive_files()
+
+    _INDEXED_PATH_CACHE["paths"] = indexed_paths
+    _INDEXED_PATH_CACHE["created_at"] = now
+    return indexed_paths
+
+
+def _rank_search_results(
+    query_text: str,
+    semantic_ids: list[str],
+    semantic_distances: list,
+    n_results: int,
+) -> list[str]:
+    normalized_query = query_text.strip().lower()
+    query_tokens = _search_tokens(normalized_query)
+    prefers_code = _query_prefers_code(query_tokens, normalized_query)
+
+    candidate_distances: dict[str, float | None] = {}
+
+    for index, relative_path in enumerate(semantic_ids):
+        if not isinstance(relative_path, str) or not relative_path:
+            continue
+
+        distance = None
+        if index < len(semantic_distances):
+            distance = semantic_distances[index]
+
+        existing = candidate_distances.get(relative_path)
+        if existing is None:
+            candidate_distances[relative_path] = distance
+        elif distance is not None:
+            try:
+                candidate_distances[relative_path] = min(float(existing), float(distance))
+            except (TypeError, ValueError):
+                candidate_distances[relative_path] = distance
+
+    for relative_path in _cached_indexed_paths():
+        if not isinstance(relative_path, str) or not relative_path:
+            continue
+        if relative_path in candidate_distances:
+            continue
+        if _is_hidden_path(relative_path):
+            continue
+
+        path_text = relative_path.lower()
+        if normalized_query and normalized_query in path_text:
+            candidate_distances[relative_path] = None
+            continue
+        if query_tokens and any(token in path_text for token in query_tokens):
+            candidate_distances[relative_path] = None
+
+    ranked = []
+    seen = set()
+    for relative_path, distance in candidate_distances.items():
+        if _is_hidden_path(relative_path):
+            continue
+
+        absolute_path = os.path.join(settings.ARCHIVE_DIR, relative_path)
+        if absolute_path in seen:
+            continue
+        if _is_hidden_path(absolute_path):
+            continue
+        if not os.path.exists(absolute_path):
+            continue
+
+        extension = Path(relative_path).suffix.lower().lstrip(".")
+        semantic = _semantic_score(distance)
+        name_score = _filename_match_score(relative_path, normalized_query, query_tokens)
+        type_score = _file_type_priority_score(extension, query_tokens, prefers_code)
+
+        final_score = semantic * 3.2 + name_score * 1.7 + type_score
+        ranked.append((final_score, semantic, name_score, type_score, absolute_path))
+        seen.add(absolute_path)
+
+    ranked.sort(
+        key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
+        reverse=True,
+    )
+
+    return [item[4] for item in ranked[:n_results]]
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
@@ -200,28 +435,26 @@ async def query(
     if not query_text:
         raise HTTPException(status_code=400, detail="Query text must be provided.")
 
-    results = chroma.query_collection(query_text=query_text, n_results=n_results)
+    result_limit = min(max(n_results, 1), 50)
+    semantic_fetch_size = max(result_limit * 8, 60)
+    results = chroma.query_collection(query_text=query_text, n_results=semantic_fetch_size)
 
-    formatted_results = (
-        results["ids"][0] if results["ids"] and results["ids"][0] else []
+    semantic_ids = results.get("ids", [[]])
+    semantic_distances = results.get("distances", [[]])
+
+    semantic_paths = semantic_ids[0] if semantic_ids and semantic_ids[0] else []
+    distances = (
+        semantic_distances[0]
+        if semantic_distances and semantic_distances[0]
+        else []
     )
 
-    # Convert to full filesystem paths for easy access and drop stale entries.
-    full_paths = []
-    seen = set()
-    for relative_path in formatted_results:
-        if _is_hidden_path(relative_path):
-            continue
-
-        absolute_path = os.path.join(settings.ARCHIVE_DIR, relative_path)
-        if _is_hidden_path(absolute_path):
-            continue
-
-        if absolute_path in seen:
-            continue
-        if os.path.exists(absolute_path):
-            full_paths.append(absolute_path)
-            seen.add(absolute_path)
+    full_paths = _rank_search_results(
+        query_text=query_text,
+        semantic_ids=semantic_paths,
+        semantic_distances=distances,
+        n_results=result_limit,
+    )
 
     return {"results": full_paths}
 
