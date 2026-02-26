@@ -1,4 +1,4 @@
-[![Archive Landing Page](https://image.thum.io/get/width/1200/wait/2/noanimate/https://archive-plugin.vercel.app/)](https://archive-plugin.vercel.app/)
+[![Archive Landing Page](docs/landing-page-snapshot.png)](https://archive-plugin.vercel.app/)
 
 # Archive Plugin
 
