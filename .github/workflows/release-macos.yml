@@ -21,12 +21,16 @@ jobs:
           python-version: "3.11"
 
       - name: Prepare signing keychain
-        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' }}
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
+
+          if [[ -z "${MACOS_CERTIFICATE_P12_BASE64:-}" || -z "${MACOS_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "Signing certificate secrets not set. Skipping keychain setup."
+            exit 0
+          fi
 
           KEYCHAIN_PATH="$RUNNER_TEMP/archive-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
@@ -55,13 +59,22 @@ jobs:
           security default-keychain -d user -s "$KEYCHAIN_PATH"
 
       - name: Store notarytool credentials
-        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
+
+          if [[ -z "${KEYCHAIN_PATH:-}" ]]; then
+            echo "Signing keychain unavailable. Skipping notary credential setup."
+            exit 0
+          fi
+          if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+            echo "Notary secrets not set. Skipping notary credential setup."
+            exit 0
+          fi
+
           NOTARY_PROFILE="archive-notary"
 
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
@@ -73,13 +86,20 @@ jobs:
       - name: Build, package, and optionally sign/notarize
         env:
           SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          NOTARY_CREDS_PRESENT: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
 
           EFFECTIVE_SIGNING_IDENTITY=""
           if [[ -n "${SIGNING_IDENTITY:-}" && -n "${KEYCHAIN_PATH:-}" ]]; then
             EFFECTIVE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+          fi
+
+          NOTARY_CREDS_PRESENT="false"
+          if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+            NOTARY_CREDS_PRESENT="true"
           fi
 
           NOTARY_PROFILE=""
