@@ -14,6 +14,9 @@ class UploadWindowManager {
     static let shared = UploadWindowManager()
     
     private var window: UploadHostingWindow?
+    var isVisible: Bool {
+        window?.isVisible ?? false
+    }
     
     private init() {}
     
@@ -66,6 +69,7 @@ class UploadWindowManager {
     }
     
     func hide() {
+        guard isVisible else { return }
         window?.orderOut(nil)
     }
 }

@@ -24,6 +24,9 @@ class SearchWindowManager {
     private var clickMonitor: Any?
     
     var onClose: (() -> Void)?
+    var isVisible: Bool {
+        window?.isVisible ?? false
+    }
     
     private init() {}
     
@@ -75,6 +78,7 @@ class SearchWindowManager {
     }
     
     func hide() {
+        guard isVisible else { return }
         removeClickOutsideMonitoring()
         window?.orderOut(nil)
         onClose?()

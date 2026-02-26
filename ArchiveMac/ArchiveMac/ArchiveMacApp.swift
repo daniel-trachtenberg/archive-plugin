@@ -200,16 +200,6 @@ struct ArchiveMacApp: App {
         } label: {
             Image(systemName: "archivebox")
         }
-        .onChange(of: isSearching) {
-            if isSearching {
-                showSearchWindow()
-            }
-        }
-        .onChange(of: isUploadViewShowing) {
-            if isUploadViewShowing {
-                showUploadWindow()
-            }
-        }
         .onChange(of: isSettingsViewShowing) {
             if isSettingsViewShowing {
                 showSettingsWindow()
@@ -228,11 +218,23 @@ struct ArchiveMacApp: App {
     }
 
     private func searchFiles() {
+        if SearchWindowManager.shared.isVisible {
+            SearchWindowManager.shared.hide()
+            isSearching = false
+            return
+        }
+
         isSearching = true
         showSearchWindow()
     }
 
     private func uploadFiles() {
+        if UploadWindowManager.shared.isVisible {
+            UploadWindowManager.shared.hide()
+            isUploadViewShowing = false
+            return
+        }
+
         isUploadViewShowing = true
         showUploadWindow()
     }
