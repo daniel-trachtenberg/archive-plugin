@@ -116,6 +116,7 @@ struct SettingsView: View {
     @State private var moveLogs: [MoveLogEntry] = []
     @State private var isLoadingMoveLogs: Bool = false
     @State private var moveLogsErrorMessage: String? = nil
+    @State private var expandedMoveLogIDs: Set<Int> = []
     @State private var showUninstallConfirmation: Bool = false
     @State private var isRunningUninstallCleanup: Bool = false
     @State private var uninstallStatusMessage: String? = nil
@@ -655,45 +656,83 @@ struct SettingsView: View {
     }
 
     private func moveLogRow(_ entry: MoveLogEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(formattedMoveLogTimestamp(entry.created_at))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Text(entry.item_type.capitalized)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text(entry.status.capitalized)
-                    .font(.caption2)
-                    .foregroundColor(entry.status.lowercased() == "success" ? .green : .red)
-            }
+        let isExpanded = expandedMoveLogIDs.contains(entry.id)
 
-            HStack(alignment: .top, spacing: 6) {
-                Text(compactPath(entry.source_path))
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "arrow.right")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Text(compactPath(entry.destination_path))
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                toggleMoveLogExpansion(entry.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(formattedMoveLogTimestamp(entry.created_at))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(entry.item_type.capitalized)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(entry.status.capitalized)
+                            .font(.caption2)
+                            .foregroundColor(entry.status.lowercased() == "success" ? .green : .red)
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
 
-            if let note = entry.note, !note.isEmpty {
-                Text(note)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(compactPath(entry.source_path))
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "arrow.right")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(compactPath(entry.destination_path))
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    if let note = entry.note, !note.isEmpty {
+                        Text(note)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    moveLogPathLink(
+                        label: "Source",
+                        path: entry.source_path,
+                        icon: "arrow.up.left"
+                    )
+                    moveLogPathLink(
+                        label: "Destination",
+                        path: entry.destination_path,
+                        icon: "arrow.down.right"
+                    )
+                }
+                .padding(10)
+                .background(Color(NSColor.windowBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(8)
+        .padding(9)
         .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
     private func compactPath(_ path: String) -> String {
@@ -711,6 +750,65 @@ struct SettingsView: View {
             return formatter.string(from: date)
         }
         return value
+    }
+
+    private func toggleMoveLogExpansion(_ id: Int) {
+        if expandedMoveLogIDs.contains(id) {
+            expandedMoveLogIDs.remove(id)
+        } else {
+            expandedMoveLogIDs.insert(id)
+        }
+    }
+
+    private func moveLogPathLink(label: String, path: String, icon: String) -> some View {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canOpen = !trimmedPath.isEmpty
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+
+            Button {
+                openMoveLogPath(trimmedPath)
+            } label: {
+                Text(canOpen ? trimmedPath : "—")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(canOpen ? .accentColor : .secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpen)
+            .help(canOpen ? "Open in Finder" : "")
+        }
+    }
+
+    private func openMoveLogPath(_ trimmedPath: String) {
+        guard !trimmedPath.isEmpty else {
+            return
+        }
+
+        let fileManager = FileManager.default
+        let url = URL(fileURLWithPath: trimmedPath)
+
+        if fileManager.fileExists(atPath: trimmedPath) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+
+        let parentURL = url.deletingLastPathComponent()
+        if fileManager.fileExists(atPath: parentURL.path) {
+            NSWorkspace.shared.open(parentURL)
+            return
+        }
+
+        NSSound.beep()
     }
 
     private func loadSettingsFromBackend() {
@@ -913,6 +1011,8 @@ struct SettingsView: View {
                 )
                 await MainActor.run {
                     moveLogs = response.logs
+                    let validIDs = Set(response.logs.map(\.id))
+                    expandedMoveLogIDs = expandedMoveLogIDs.intersection(validIDs)
                     isLoadingMoveLogs = false
                 }
             } catch let error as APIError {
@@ -920,12 +1020,14 @@ struct SettingsView: View {
                     isLoadingMoveLogs = false
                     moveLogsErrorMessage = "Error: \(error.localizedDescription)"
                     moveLogs = []
+                    expandedMoveLogIDs.removeAll()
                 }
             } catch {
                 await MainActor.run {
                     isLoadingMoveLogs = false
                     moveLogsErrorMessage = "Error: \(error.localizedDescription)"
                     moveLogs = []
+                    expandedMoveLogIDs.removeAll()
                 }
             }
         }
