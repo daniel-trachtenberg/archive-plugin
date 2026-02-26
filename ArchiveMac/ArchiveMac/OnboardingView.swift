@@ -1,9 +1,52 @@
 import SwiftUI
+import ServiceManagement
+
+private enum LaunchAtLoginState {
+    case enabled
+    case disabled
+    case requiresApproval
+    case notFound
+    case unsupported
+}
+
+private enum LaunchAtLoginManager {
+    static func currentState() -> LaunchAtLoginState {
+        guard #available(macOS 13.0, *) else {
+            return .unsupported
+        }
+
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            return .enabled
+        case .notRegistered:
+            return .disabled
+        case .requiresApproval:
+            return .requiresApproval
+        case .notFound:
+            return .notFound
+        @unknown default:
+            return .disabled
+        }
+    }
+
+    static func setEnabled(_ enabled: Bool) throws {
+        guard #available(macOS 13.0, *) else {
+            return
+        }
+
+        if enabled {
+            try SMAppService.mainApp.register()
+        } else {
+            try SMAppService.mainApp.unregister()
+        }
+    }
+}
 
 private enum OnboardingStep: Int, CaseIterable {
     case welcome
     case folders
     case ai
+    case startup
     case shortcuts
 
     var title: String {
@@ -14,6 +57,8 @@ private enum OnboardingStep: Int, CaseIterable {
             return "Folders"
         case .ai:
             return "AI"
+        case .startup:
+            return "Startup"
         case .shortcuts:
             return "Shortcuts"
         }
@@ -27,6 +72,8 @@ private enum OnboardingStep: Int, CaseIterable {
             return "Choose your input and archive locations"
         case .ai:
             return "Pick cloud or local AI setup"
+        case .startup:
+            return "Set Archive to launch at login"
         case .shortcuts:
             return "Customize keyboard shortcuts"
         }
@@ -84,10 +131,16 @@ struct OnboardingView: View {
     @State private var searchShortcut: ShortcutDefinition
     @State private var uploadShortcut: ShortcutDefinition
     @State private var settingsShortcut: ShortcutDefinition
+    @State private var launchAtLoginEnabled: Bool = false
+    @State private var launchAtLoginMessage: String? = nil
+    @State private var isUpdatingLaunchAtLogin: Bool = false
+    @State private var suppressLaunchAtLoginToggleHandler: Bool = false
+    @State private var hasAutoRequestedLaunchAtLogin: Bool = false
 
     @State private var isSaving: Bool = false
     @State private var errorMessage: String? = nil
 
+    private let shouldAutoRequestLaunchAtLogin: Bool
     let onComplete: () -> Void
 
     init(onComplete: @escaping () -> Void = {}) {
@@ -114,6 +167,7 @@ struct OnboardingView: View {
         self._searchShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .search))
         self._uploadShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .upload))
         self._settingsShortcut = State(initialValue: SettingsService.shared.getShortcut(for: .settings))
+        self.shouldAutoRequestLaunchAtLogin = !SettingsService.shared.hasCompletedOnboarding()
     }
 
     private var modelOptions: [String] {
@@ -138,6 +192,8 @@ struct OnboardingView: View {
                         folderStep
                     case .ai:
                         aiStep
+                    case .startup:
+                        startupStep
                     case .shortcuts:
                         shortcutStepScrollable
                     }
@@ -165,6 +221,7 @@ struct OnboardingView: View {
                 }
                 selectedModelOption = customModelToken
             }
+            syncLaunchAtLoginState()
         }
         .onChange(of: providerMode) { _, newMode in
             if newMode == .local {
@@ -187,6 +244,17 @@ struct OnboardingView: View {
             if providerMode == .cloud && newValue != customModelToken {
                 llmModel = newValue
             }
+        }
+        .onChange(of: step) { _, newStep in
+            if newStep == .startup {
+                maybeAutoRequestLaunchAtLogin()
+            }
+        }
+        .onChange(of: launchAtLoginEnabled) { _, newValue in
+            if suppressLaunchAtLoginToggleHandler {
+                return
+            }
+            updateLaunchAtLogin(enabled: newValue, automatic: false)
         }
     }
 
@@ -398,6 +466,64 @@ struct OnboardingView: View {
         }
     }
 
+    private var startupStep: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            onboardingFeatureCard(
+                icon: "🚀",
+                title: "Keep Archive ready at startup",
+                detail: "Archive can launch automatically when you sign in, so shortcuts and background indexing are available immediately.",
+                colors: [Color.green.opacity(0.22), Color.teal.opacity(0.17)]
+            )
+
+            Text("Archive can request login-item access. macOS may show an approval prompt.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                Text("Open at Login")
+                    .frame(width: 112, alignment: .leading)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+
+                if isUpdatingLaunchAtLogin {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Toggle("", isOn: $launchAtLoginEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(isUpdatingLaunchAtLogin || LaunchAtLoginManager.currentState() == .unsupported)
+            }
+
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .overlay(alignment: .leading) {
+                    Text(
+                        launchAtLoginMessage
+                            ?? "Turn this on to launch Archive whenever your Mac signs in."
+                    )
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                }
+                .frame(height: 52)
+
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .overlay(alignment: .leading) {
+                    Text("If approval is required, open System Settings > General > Login Items and allow Archive.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                }
+                .frame(height: 52)
+
+            Spacer(minLength: 0)
+        }
+    }
+
     private var shortcutStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             onboardingFeatureCard(
@@ -498,6 +624,7 @@ struct OnboardingView: View {
                     continueTapped()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(step == .startup && isUpdatingLaunchAtLogin)
             }
         }
         .padding(.horizontal, 24)
@@ -622,6 +749,75 @@ struct OnboardingView: View {
                         inputFolderPath = url.path
                     } else {
                         outputFolderPath = url.path
+                    }
+                }
+            }
+        }
+    }
+
+    private func syncLaunchAtLoginState() {
+        let state = LaunchAtLoginManager.currentState()
+        suppressLaunchAtLoginToggleHandler = true
+
+        switch state {
+        case .enabled:
+            launchAtLoginEnabled = true
+            launchAtLoginMessage = "Enabled. Archive will open automatically at login."
+        case .requiresApproval:
+            launchAtLoginEnabled = true
+            launchAtLoginMessage = "Requested. Approve Archive in Login Items if macOS asks."
+        case .disabled:
+            launchAtLoginEnabled = false
+            launchAtLoginMessage = "Off. Turn on to launch Archive at login."
+        case .notFound:
+            launchAtLoginEnabled = false
+            launchAtLoginMessage = "Archive must be in /Applications before login launch can be enabled."
+        case .unsupported:
+            launchAtLoginEnabled = false
+            launchAtLoginMessage = "Launch at login requires macOS 13 or later."
+        }
+
+        suppressLaunchAtLoginToggleHandler = false
+    }
+
+    private func maybeAutoRequestLaunchAtLogin() {
+        syncLaunchAtLoginState()
+        guard shouldAutoRequestLaunchAtLogin else {
+            return
+        }
+        guard !hasAutoRequestedLaunchAtLogin else {
+            return
+        }
+        guard !launchAtLoginEnabled else {
+            return
+        }
+
+        hasAutoRequestedLaunchAtLogin = true
+        updateLaunchAtLogin(enabled: true, automatic: true)
+    }
+
+    private func updateLaunchAtLogin(enabled: Bool, automatic: Bool) {
+        guard !isUpdatingLaunchAtLogin else {
+            return
+        }
+
+        isUpdatingLaunchAtLogin = true
+
+        Task(priority: .utility) {
+            do {
+                try LaunchAtLoginManager.setEnabled(enabled)
+                await MainActor.run {
+                    isUpdatingLaunchAtLogin = false
+                    syncLaunchAtLoginState()
+                }
+            } catch {
+                await MainActor.run {
+                    isUpdatingLaunchAtLogin = false
+                    syncLaunchAtLoginState()
+                    if automatic {
+                        launchAtLoginMessage = "Auto-enable failed. You can still toggle Open at Login manually."
+                    } else {
+                        launchAtLoginMessage = "Could not update launch setting. Try again from /Applications."
                     }
                 }
             }
