@@ -212,3 +212,25 @@ def rename(
     except Exception as e:
         logging.error(f"Error renaming item in collection: {e}")
         return False
+
+
+def list_indexed_paths(collection_name: str = "archive"):
+    """
+    Return all indexed file paths currently stored in Chroma.
+    """
+    try:
+        collection = ensure_collection_exists(collection_name)
+        if not collection:
+            return set()
+
+        payload = None
+        try:
+            payload = collection.get(include=[])
+        except Exception:
+            payload = collection.get()
+
+        ids = payload.get("ids", []) if isinstance(payload, dict) else []
+        return {item for item in ids if isinstance(item, str) and item}
+    except Exception as e:
+        logging.error(f"Error listing indexed paths from collection: {e}")
+        return set()

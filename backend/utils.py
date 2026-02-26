@@ -12,6 +12,7 @@ from pptx import Presentation
 import shutil
 from config import settings
 from datetime import datetime
+from time import monotonic
 import docx
 import pandas as pd
 
@@ -344,16 +345,146 @@ def limit_text_for_llm(text, max_chars=8192):
     return text[:max_chars]
 
 
-def directory_structure_for_llm():
+_DIRECTORY_CONTEXT_CACHE = {"value": "", "created_at": 0.0}
+_DIRECTORY_CONTEXT_CACHE_TTL_SECONDS = 10
+
+
+def _normalize_path_for_prompt(path: str) -> str:
+    return (path or "").replace("\\", "/").strip()
+
+
+def _is_visible_prompt_path(path: str) -> bool:
+    normalized = _normalize_path_for_prompt(path)
+    if not normalized:
+        return False
+
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return False
+    if any(part == ".chromadb" for part in parts):
+        return False
+    if any(part.startswith(".") for part in parts):
+        return False
+    return True
+
+
+def _sorted_visible_paths(paths):
+    visible = {
+        _normalize_path_for_prompt(path)
+        for path in paths
+        if isinstance(path, str) and _is_visible_prompt_path(path)
+    }
+    return sorted(visible)
+
+
+def _trim_paths_for_prompt(paths, max_items: int):
+    if max_items <= 0:
+        return []
+
+    if len(paths) <= max_items:
+        return list(paths)
+
+    remaining = len(paths) - max_items
+    return list(paths[:max_items]) + [
+        f"... ({remaining} additional paths omitted to fit prompt limits)"
+    ]
+
+
+def _build_directory_context_payload(max_chars: int = 18000) -> str:
+    archive_files = _sorted_visible_paths(filesystem.list_archive_files())
+    indexed_files = _sorted_visible_paths(chroma.list_indexed_paths())
+
+    archive_set = set(archive_files)
+    indexed_set = set(indexed_files)
+    unindexed_files = sorted(archive_set - indexed_set)
+    db_only_records = sorted(indexed_set - archive_set)
+
+    tree_text = filesystem.directory_tree_for_llm(
+        max_entries=max(2000, len(archive_files) + 200)
+    )
+
+    # Try increasingly smaller variants until we fit safely within max_chars.
+    variants = [
+        {"tree_chars": 12000, "archive": 1200, "indexed": 600, "unindexed": 1200, "db_only": 600},
+        {"tree_chars": 9000, "archive": 800, "indexed": 400, "unindexed": 800, "db_only": 400},
+        {"tree_chars": 7000, "archive": 500, "indexed": 250, "unindexed": 500, "db_only": 250},
+        {"tree_chars": 5000, "archive": 300, "indexed": 150, "unindexed": 300, "db_only": 150},
+    ]
+
+    for variant in variants:
+        payload = {
+            "archive_tree": limit_text_for_llm(tree_text, max_chars=variant["tree_chars"]),
+            "stats": {
+                "archive_file_count": len(archive_files),
+                "indexed_file_count": len(indexed_files),
+                "unindexed_file_count": len(unindexed_files),
+                "db_only_record_count": len(db_only_records),
+            },
+            # Files currently present in archive (whether indexed or not).
+            "archive_files": _trim_paths_for_prompt(archive_files, variant["archive"]),
+            # Files known to Chroma index.
+            "indexed_files": _trim_paths_for_prompt(indexed_files, variant["indexed"]),
+            # Files present in archive but not yet in Chroma.
+            "unindexed_archive_files": _trim_paths_for_prompt(
+                unindexed_files, variant["unindexed"]
+            ),
+            # Records in Chroma that no longer exist on disk.
+            "db_only_index_records": _trim_paths_for_prompt(
+                db_only_records, variant["db_only"]
+            ),
+        }
+
+        serialized = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        if len(serialized) <= max_chars:
+            return serialized
+
+    minimal_payload = {
+        "archive_tree": limit_text_for_llm(tree_text, max_chars=3500),
+        "stats": {
+            "archive_file_count": len(archive_files),
+            "indexed_file_count": len(indexed_files),
+            "unindexed_file_count": len(unindexed_files),
+            "db_only_record_count": len(db_only_records),
+        },
+        "unindexed_archive_files": _trim_paths_for_prompt(unindexed_files, 120),
+        "db_only_index_records": _trim_paths_for_prompt(db_only_records, 120),
+    }
+    return json.dumps(minimal_payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def _invalidate_directory_context_cache():
+    _DIRECTORY_CONTEXT_CACHE["value"] = ""
+    _DIRECTORY_CONTEXT_CACHE["created_at"] = 0.0
+
+
+def directory_structure_for_llm(force_refresh: bool = False):
     """
-    Convert the nested filesystem structure to a compact string for prompts.
+    Build an LLM-ready placement context with:
+    - archive directory tree
+    - all visible archive files
+    - indexed/unindexed split vs ChromaDB
+    - stale DB records
     """
-    structure = filesystem.get_directory_structure()
+    now = monotonic()
+    cache_age = now - _DIRECTORY_CONTEXT_CACHE["created_at"]
+    if (
+        not force_refresh
+        and _DIRECTORY_CONTEXT_CACHE["value"]
+        and cache_age < _DIRECTORY_CONTEXT_CACHE_TTL_SECONDS
+    ):
+        return _DIRECTORY_CONTEXT_CACHE["value"]
+
     try:
-        serialized = json.dumps(structure, separators=(",", ":"))
-    except Exception:
-        serialized = str(structure)
-    return limit_text_for_llm(serialized, max_chars=6000)
+        context = _build_directory_context_payload(max_chars=18000)
+        _DIRECTORY_CONTEXT_CACHE["value"] = context
+        _DIRECTORY_CONTEXT_CACHE["created_at"] = now
+        return context
+    except Exception as e:
+        logging.error(f"Failed building llm directory context: {e}")
+        fallback = filesystem.directory_tree_for_llm(max_entries=800)
+        _DIRECTORY_CONTEXT_CACHE["value"] = fallback
+        _DIRECTORY_CONTEXT_CACHE["created_at"] = now
+        return fallback
 
 
 def _ensure_unique_relative_path(relative_path: str) -> str:
@@ -487,6 +618,7 @@ async def process_document(
         # Save file to filesystem
         if not filesystem.save_file(content, final_path):
             raise RuntimeError("Failed to save document to archive filesystem.")
+        _invalidate_directory_context_cache()
 
         # Add to vector database
         embedding_payload = (
@@ -605,6 +737,7 @@ async def process_image(
         # Save file to filesystem
         if not filesystem.save_file(content, final_path):
             raise RuntimeError("Failed to save image to archive filesystem.")
+        _invalidate_directory_context_cache()
 
         # Add to vector database
         chroma.add_image_to_collection(
@@ -987,6 +1120,7 @@ async def process_folder(
 
         # Log the final path to the terminal
         print(f"Folder moved to: {final_path}")
+        _invalidate_directory_context_cache()
 
         # Now that the folder is fully processed and in its final location,
         # trigger a reconciliation to update the database with the new files
@@ -1313,6 +1447,9 @@ async def reconcile_filesystem_with_chroma():
         print(f"\n========== RECONCILIATION COMPLETE ==========")
         print(f"Added: {added_count} files, Removed: {removed_count} files")
         print(f"Current database status: {len(filesystem_files)} files indexed\n")
+
+        if added_count or removed_count:
+            _invalidate_directory_context_cache()
 
         logging.info(
             f"Reconciliation complete. Added {added_count} files, removed {removed_count} files."

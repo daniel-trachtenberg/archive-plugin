@@ -464,8 +464,8 @@ Return XML only:
 
 async def get_path_from_summary(filename: str, summary: str, directory_structure: str) -> str:
     """Return a normalized folder path from file summary."""
-    structure_text = str(directory_structure)
-    structure_preview = structure_text[:4000]
+    structure_text = str(directory_structure or "")
+    structure_preview = structure_text[:16000]
 
     prompt = f"""
 {LLMService.SYSTEM_PROMPT}
@@ -477,10 +477,13 @@ Constraints:
 - No filename in the path.
 - Max depth: 3 segments.
 - Use generic category names when uncertain.
+- Prefer existing folder patterns from the provided context.
+- The context includes filesystem tree + index status. Files in `unindexed_archive_files`
+  are on disk but not yet embedded; files in `db_only_index_records` are stale DB records.
 
 <file-name>{filename}</file-name>
 <summary>{summary}</summary>
-<directory-structure>{structure_preview}</directory-structure>
+<placement-context-json>{structure_preview}</placement-context-json>
 """.strip()
 
     raw = _call_model(prompt, timeout=45, num_predict=80)
