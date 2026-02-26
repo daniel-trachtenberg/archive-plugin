@@ -123,6 +123,9 @@ struct SettingsView: View {
     private let providerModeOptions: [ProviderMode] = [.cloud, .local]
 
     private let customModelToken = "__custom_model__"
+    private let folderLabelWidth: CGFloat = 56
+    private let folderPathFieldWidth: CGFloat = 440
+    private let folderBrowseButtonWidth: CGFloat = 72
 
     private let openAIModelOptions: [String] = [
         "gpt-5.2",
@@ -556,22 +559,24 @@ struct SettingsView: View {
     private func folderRow(title: String, path: Binding<String>, isInput: Bool) -> some View {
         HStack(spacing: 10) {
             Text(title)
-                .frame(width: 56, alignment: .leading)
+                .frame(width: folderLabelWidth, alignment: .leading)
                 .foregroundColor(.secondary)
             TextField("", text: path)
                 .textFieldStyle(.roundedBorder)
+                .frame(width: folderPathFieldWidth)
             Button("Browse") {
                 selectFolderPath(isInput: isInput)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .frame(width: folderBrowseButtonWidth)
         }
     }
 
     private var watchInputRow: some View {
         HStack(alignment: .center, spacing: 10) {
             Text("Auto")
-                .frame(width: 56, alignment: .leading)
+                .frame(width: folderLabelWidth, alignment: .leading)
                 .foregroundColor(.secondary)
 
             VStack(alignment: .leading, spacing: 2) {

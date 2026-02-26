@@ -1,5 +1,4 @@
 import SwiftUI
-import HotKey
 import AppKit
 
 private final class HotkeyBridge: ObservableObject {
@@ -11,17 +10,29 @@ private final class HotkeyBridge: ObservableObject {
     @Published var uploadSignal: Int = 0
     @Published var settingsSignal: Int = 0
 
-    private var searchHotkey: HotKey?
-    private var uploadHotkey: HotKey?
-    private var settingsHotkey: HotKey?
     private var shortcutsObserver: NSObjectProtocol?
     private var launchObserver: NSObjectProtocol?
     private var becameActiveObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+    private var sessionActiveObserver: NSObjectProtocol?
+    private var screenWakeObserver: NSObjectProtocol?
+    private var retryWorkItems: [DispatchWorkItem] = []
 
     init() {
         searchKeyboardShortcut = SettingsService.shared.getShortcut(for: .search).keyboardShortcut
         uploadKeyboardShortcut = SettingsService.shared.getShortcut(for: .upload).keyboardShortcut
         settingsKeyboardShortcut = SettingsService.shared.getShortcut(for: .settings).keyboardShortcut
+
+        GlobalHotKeyManager.shared.onHotKeyPressed = { [weak self] action in
+            switch action {
+            case .search:
+                self?.searchSignal += 1
+            case .upload:
+                self?.uploadSignal += 1
+            case .settings:
+                self?.settingsSignal += 1
+            }
+        }
 
         shortcutsObserver = NotificationCenter.default.addObserver(
             forName: .archiveShortcutsDidChange,
@@ -47,10 +58,36 @@ private final class HotkeyBridge: ObservableObject {
             self?.reloadShortcutsAndHotkeys()
         }
 
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadShortcutsAndHotkeys()
+        }
+
+        sessionActiveObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadShortcutsAndHotkeys()
+        }
+
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadShortcutsAndHotkeys()
+        }
+
         refreshHotkeysAfterLaunch()
     }
 
     deinit {
+        retryWorkItems.forEach { $0.cancel() }
+
         if let shortcutsObserver {
             NotificationCenter.default.removeObserver(shortcutsObserver)
         }
@@ -60,57 +97,85 @@ private final class HotkeyBridge: ObservableObject {
         if let becameActiveObserver {
             NotificationCenter.default.removeObserver(becameActiveObserver)
         }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let sessionActiveObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sessionActiveObserver)
+        }
+        if let screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
+        }
     }
 
     private func refreshHotkeysAfterLaunch() {
+        retryWorkItems.forEach { $0.cancel() }
+        retryWorkItems.removeAll()
+
         DispatchQueue.main.async { [weak self] in
             self?.reloadShortcutsAndHotkeys()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.reloadShortcutsAndHotkeys()
+        // Re-bind repeatedly after launch to recover from early login-session timing races.
+        let retryDelays: [TimeInterval] = [0.8, 2.0, 5.0, 12.0]
+        for delay in retryDelays {
+            let retryItem = DispatchWorkItem { [weak self] in
+                self?.reloadShortcutsAndHotkeys()
+            }
+            retryWorkItems.append(retryItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retryItem)
         }
     }
 
     private func reloadShortcutsAndHotkeys() {
-        let searchShortcut = SettingsService.shared.getShortcut(for: .search)
-        let uploadShortcut = SettingsService.shared.getShortcut(for: .upload)
-        let settingsShortcut = SettingsService.shared.getShortcut(for: .settings)
+        let preferredShortcuts: [ShortcutAction: ShortcutDefinition] = [
+            .search: SettingsService.shared.getShortcut(for: .search),
+            .upload: SettingsService.shared.getShortcut(for: .upload),
+            .settings: SettingsService.shared.getShortcut(for: .settings)
+        ]
 
-        searchKeyboardShortcut = searchShortcut.keyboardShortcut
-        uploadKeyboardShortcut = uploadShortcut.keyboardShortcut
-        settingsKeyboardShortcut = settingsShortcut.keyboardShortcut
+        let fallbackShortcuts: [ShortcutAction: [ShortcutDefinition]] = [
+            .search: [
+                ShortcutDefinition(key: .space, modifiers: [.control, .option]),
+                ShortcutDefinition(key: .space, modifiers: [.command, .shift]),
+                ShortcutDefinition(key: .f, modifiers: [.control, .option])
+            ],
+            .upload: [
+                ShortcutDefinition(key: .u, modifiers: [.control, .option]),
+                ShortcutDefinition(key: .u, modifiers: [.command, .shift]),
+                ShortcutDefinition(key: .i, modifiers: [.control, .option])
+            ],
+            .settings: [
+                ShortcutDefinition(key: .comma, modifiers: [.control, .option]),
+                ShortcutDefinition(key: .comma, modifiers: [.command, .option]),
+                ShortcutDefinition(key: .s, modifiers: [.control, .option])
+            ]
+        ]
 
-        configureGlobalHotKeys(
-            searchShortcut: searchShortcut,
-            uploadShortcut: uploadShortcut,
-            settingsShortcut: settingsShortcut
+        let resolvedShortcuts = GlobalHotKeyManager.shared.rebind(
+            preferredShortcuts: preferredShortcuts,
+            fallbackShortcuts: fallbackShortcuts
         )
-    }
 
-    private func configureGlobalHotKeys(
-        searchShortcut: ShortcutDefinition,
-        uploadShortcut: ShortcutDefinition,
-        settingsShortcut: ShortcutDefinition
-    ) {
-        searchHotkey = searchShortcut.makeHotKey()
-        searchHotkey?.keyDownHandler = { [weak self] in
-            DispatchQueue.main.async {
-                self?.searchSignal += 1
+        for action in ShortcutAction.allCases {
+            guard let preferred = preferredShortcuts[action] else {
+                continue
             }
-        }
 
-        uploadHotkey = uploadShortcut.makeHotKey()
-        uploadHotkey?.keyDownHandler = { [weak self] in
-            DispatchQueue.main.async {
-                self?.uploadSignal += 1
+            let activeShortcut = resolvedShortcuts[action] ?? preferred
+
+            if activeShortcut != preferred {
+                SettingsService.shared.setShortcut(activeShortcut, for: action, notify: false)
+                print("[Hotkeys] Adjusted \(action.rawValue) shortcut to \(activeShortcut.displayString) to avoid registration conflicts.")
             }
-        }
 
-        settingsHotkey = settingsShortcut.makeHotKey()
-        settingsHotkey?.keyDownHandler = { [weak self] in
-            DispatchQueue.main.async {
-                self?.settingsSignal += 1
+            switch action {
+            case .search:
+                searchKeyboardShortcut = activeShortcut.keyboardShortcut
+            case .upload:
+                uploadKeyboardShortcut = activeShortcut.keyboardShortcut
+            case .settings:
+                settingsKeyboardShortcut = activeShortcut.keyboardShortcut
             }
         }
     }
