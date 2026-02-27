@@ -126,6 +126,9 @@ _TREE_LINE_PATTERN = re.compile(
     r"^(?P<prefix>(?:\|   |    )*)(?:\|-- |`-- )(?P<name>.+)$"
 )
 
+_MAX_FOLDER_PATH_DEPTH = 7
+_EXISTING_PATH_CONFIDENCE_THRESHOLD = 1.5
+
 
 class LLMService:
     SYSTEM_PROMPT = """
@@ -133,9 +136,9 @@ You organize local files into clean folders for semantic retrieval.
 
 Rules:
 - Return only a folder path, never a filename.
-- Keep paths shallow (1 to 3 levels).
+- Keep paths concise (1 to 7 levels).
 - Use concise folder names in TitleCase.
-- Prefer an existing path when appropriate, but create a clear new path if needed.
+- Prefer existing directories first. If a new folder is needed, extend an existing path instead of creating a brand-new top-level root.
 """.strip()
 
     @staticmethod
@@ -391,6 +394,23 @@ def _sanitize_segment(segment: str) -> str:
     return "".join(words[:4])
 
 
+def _canonical_segment_token(segment: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]", "", (segment or "").lower())
+    if not cleaned:
+        return ""
+
+    aliases = {
+        "hw": "homework",
+        "hws": "homework",
+        "homework": "homework",
+        "assignments": "homework",
+        "assignment": "homework",
+        "notes": "notes",
+        "lecturenotes": "notes",
+    }
+    return aliases.get(cleaned, cleaned)
+
+
 def _normalize_path(path: str) -> str:
     path = (path or "").replace("\\", "/").strip().strip("/")
     if not path:
@@ -398,7 +418,7 @@ def _normalize_path(path: str) -> str:
 
     raw_parts = [p for p in path.split("/") if p and p not in {".", ".."}]
     cleaned_parts = []
-    for part in raw_parts[:3]:
+    for part in raw_parts[:_MAX_FOLDER_PATH_DEPTH]:
         clean_part = _sanitize_segment(part)
         if clean_part:
             cleaned_parts.append(clean_part)
@@ -468,7 +488,7 @@ def _add_directory_prefixes(path: str, accumulator: set[str]) -> None:
         return
 
     parts = normalized.split("/")
-    for idx in range(1, min(len(parts), 3) + 1):
+    for idx in range(1, min(len(parts), _MAX_FOLDER_PATH_DEPTH) + 1):
         candidate = "/".join(parts[:idx])
         if candidate:
             accumulator.add(candidate)
@@ -480,6 +500,12 @@ def _extract_existing_directories(directory_structure: str) -> list[str]:
         return []
 
     directories: set[str] = set()
+
+    explicit_directories = payload.get("existing_directories", [])
+    if isinstance(explicit_directories, list):
+        for entry in explicit_directories:
+            if isinstance(entry, str):
+                _add_directory_prefixes(entry, directories)
 
     for key in ("archive_files", "unindexed_archive_files", "indexed_files"):
         entries = payload.get(key, [])
@@ -541,19 +567,19 @@ def _score_directory_candidate(
         1 for segment in candidate.split("/") if segment.lower() in _GENERIC_ROOT_SEGMENTS
     )
     score -= float(generic_segments)
-    score += min(len(candidate.split("/")), 3) * 0.1
+    score += min(len(candidate.split("/")), _MAX_FOLDER_PATH_DEPTH) * 0.1
 
     return score
 
 
-def _best_existing_path_from_context(
+def _score_existing_directories(
     filename: str,
     summary: str,
     directory_structure: str,
-) -> str:
+) -> list[tuple[float, str]]:
     existing_dirs = _extract_existing_directories(directory_structure)
     if not existing_dirs:
-        return ""
+        return []
 
     filename_base = os.path.splitext(os.path.basename(filename or ""))[0]
     summary_tokens = _tokenize_for_matching(summary)
@@ -565,7 +591,7 @@ def _best_existing_path_from_context(
         summary_tokens |= _DOMAIN_ALIASES.get(domain, set())
 
     if not summary_tokens and not filename_tokens:
-        return ""
+        return []
 
     scored = [
         (
@@ -575,11 +601,142 @@ def _best_existing_path_from_context(
         for candidate in existing_dirs
     ]
     scored.sort(key=lambda item: item[0], reverse=True)
-    best_score, best_candidate = scored[0]
+    return scored
 
-    if best_score < 1.5:
+
+def _best_existing_path_from_context(
+    filename: str,
+    summary: str,
+    directory_structure: str,
+) -> str:
+    scored = _score_existing_directories(filename, summary, directory_structure)
+    if not scored:
+        return ""
+
+    best_score, best_candidate = scored[0]
+    if best_score < _EXISTING_PATH_CONFIDENCE_THRESHOLD:
         return ""
     return best_candidate
+
+
+def _top_existing_candidates_from_context(
+    filename: str,
+    summary: str,
+    directory_structure: str,
+    limit: int = 20,
+) -> list[str]:
+    if limit <= 0:
+        return []
+
+    scored = _score_existing_directories(filename, summary, directory_structure)
+    if not scored:
+        return []
+
+    return [candidate for _, candidate in scored[:limit]]
+
+
+def _longest_existing_prefix(path: str, existing_dirs: set[str]) -> str:
+    normalized = _normalize_path(path)
+    if not normalized:
+        return ""
+
+    parts = [part for part in normalized.split("/") if part]
+    for idx in range(min(len(parts), _MAX_FOLDER_PATH_DEPTH), 0, -1):
+        candidate = "/".join(parts[:idx])
+        if candidate in existing_dirs:
+            return candidate
+    return ""
+
+
+def _root_segment(path: str) -> str:
+    normalized = _normalize_path(path)
+    if not normalized:
+        return ""
+    return normalized.split("/", 1)[0]
+
+
+def _anchor_to_existing_path(
+    model_path: str,
+    anchor_path: str,
+    existing_dirs: list[str],
+) -> str:
+    normalized_model = _normalize_path(model_path)
+    normalized_anchor = _normalize_path(anchor_path)
+    if not normalized_anchor:
+        return normalized_model
+    if not normalized_model:
+        return normalized_anchor
+
+    existing_set = {candidate for candidate in existing_dirs if candidate}
+    if normalized_model in existing_set:
+        return normalized_model
+
+    if _longest_existing_prefix(normalized_model, existing_set):
+        return normalized_model
+
+    model_parts = [part for part in normalized_model.split("/") if part]
+    anchor_parts = [part for part in normalized_anchor.split("/") if part]
+    anchor_set_lower = {part.lower() for part in anchor_parts}
+    anchor_canonical = {
+        _canonical_segment_token(part) for part in anchor_parts if _canonical_segment_token(part)
+    }
+    existing_roots = {
+        candidate.split("/", 1)[0].lower()
+        for candidate in existing_set
+        if candidate
+    }
+
+    # If model invents a new root, drop it and anchor under best existing branch.
+    if model_parts and model_parts[0].lower() not in existing_roots:
+        model_parts = model_parts[1:]
+
+    # If model includes anchor terms deeper in the path, trim leading generic-ish prefixes.
+    for idx, part in enumerate(model_parts):
+        if part.lower() in anchor_set_lower:
+            model_parts = model_parts[idx:]
+            break
+
+    # Drop any direct suffix/prefix overlap to avoid duplicated joins.
+    max_overlap = min(len(anchor_parts), len(model_parts))
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        anchor_suffix = [p.lower() for p in anchor_parts[-size:]]
+        model_prefix = [p.lower() for p in model_parts[:size]]
+        if anchor_suffix == model_prefix:
+            overlap = size
+            break
+    if overlap:
+        model_parts = model_parts[overlap:]
+
+    filtered_tail: list[str] = []
+    for part in model_parts:
+        cleaned = _sanitize_segment(part)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        canonical = _canonical_segment_token(cleaned)
+        if lowered in _GENERIC_ROOT_SEGMENTS:
+            continue
+        if lowered in anchor_set_lower:
+            continue
+        if canonical and canonical in anchor_canonical:
+            continue
+        if filtered_tail and filtered_tail[-1].lower() == lowered:
+            continue
+        filtered_tail.append(cleaned)
+
+    if filtered_tail and anchor_parts and filtered_tail[0].lower() == anchor_parts[-1].lower():
+        filtered_tail = filtered_tail[1:]
+
+    if not filtered_tail:
+        return normalized_anchor
+
+    candidate = _normalize_path("/".join(anchor_parts + filtered_tail))
+    if not candidate:
+        return normalized_anchor
+    if _is_generic_root(candidate):
+        return normalized_anchor
+    return candidate
 
 
 def _guess_media_type(filename: str) -> str:
@@ -701,6 +858,27 @@ async def get_path_from_summary(filename: str, summary: str, directory_structure
     """Return a normalized folder path from file summary."""
     structure_text = str(directory_structure or "")
     structure_preview = structure_text[:16000]
+    existing_dirs = _extract_existing_directories(directory_structure)
+    existing_dir_set = {candidate for candidate in existing_dirs if candidate}
+    existing_roots = {
+        candidate.split("/", 1)[0].lower()
+        for candidate in existing_dir_set
+        if candidate
+    }
+    ranked_existing = _score_existing_directories(filename, summary, directory_structure)
+    existing_context_path = _best_existing_path_from_context(
+        filename=filename,
+        summary=summary,
+        directory_structure=directory_structure,
+    )
+    existing_anchor_path = existing_context_path
+    top_existing_candidates = _top_existing_candidates_from_context(
+        filename=filename,
+        summary=summary,
+        directory_structure=directory_structure,
+        limit=20,
+    )
+    top_candidates_preview = json.dumps(top_existing_candidates, ensure_ascii=False)
 
     prompt = f"""
 {LLMService.SYSTEM_PROMPT}
@@ -708,17 +886,25 @@ async def get_path_from_summary(filename: str, summary: str, directory_structure
 Pick the best folder path for this file.
 Return JSON only: {{"path": "Top/Sub"}}
 
+Decision order (strict):
+1) Reuse an existing path when it already fits.
+2) If needed, extend an existing path with new subfolders.
+3) Only create a brand-new top-level root when no existing branch can reasonably fit.
+
 Constraints:
 - No filename in the path.
-- Max depth: 3 segments.
-- Prefer existing folder patterns from the provided context.
+- Max depth: 7 segments.
+- Keep depth context-dependent: prefer short paths by default, but use deeper existing folders when they are a clear semantic match.
+- Prioritize existing folder patterns from the provided context.
 - Prefer topical folders over file-type buckets (for example, `Taxes/2025` not `Documents/Taxes`).
 - Avoid starting paths with generic roots like `Documents` or `Files` unless there is no clearer topic.
 - The context includes filesystem tree + index status. Files in `unindexed_archive_files`
   are on disk but not yet embedded; files in `db_only_index_records` are stale DB records.
+- `top-existing-candidates` is a shortlist of the strongest existing directories.
 
 <file-name>{filename}</file-name>
 <summary>{summary}</summary>
+<top-existing-candidates>{top_candidates_preview}</top-existing-candidates>
 <placement-context-json>{structure_preview}</placement-context-json>
 """.strip()
 
@@ -727,14 +913,22 @@ Constraints:
     normalized = _normalize_path(extracted)
     normalized = _strip_generic_root(normalized)
 
-    existing_context_path = _best_existing_path_from_context(
-        filename=filename,
-        summary=summary,
-        directory_structure=directory_structure,
-    )
-
-    if normalized and not _is_generic_root(normalized):
+    if normalized and normalized in existing_dir_set:
         return normalized
+
+    if normalized:
+        if _longest_existing_prefix(normalized, existing_dir_set):
+            return normalized
+
+        normalized_root = _root_segment(normalized).lower()
+        if normalized_root and normalized_root in existing_roots:
+            return normalized
+
+        if existing_anchor_path:
+            return _anchor_to_existing_path(normalized, existing_anchor_path, existing_dirs)
+
+        if not _is_generic_root(normalized):
+            return normalized
 
     if existing_context_path:
         return existing_context_path

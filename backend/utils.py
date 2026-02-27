@@ -347,6 +347,7 @@ def limit_text_for_llm(text, max_chars=8192):
 
 _DIRECTORY_CONTEXT_CACHE = {"value": "", "created_at": 0.0}
 _DIRECTORY_CONTEXT_CACHE_TTL_SECONDS = 10
+_MAX_FOLDER_PATH_DEPTH = 7
 
 
 def _normalize_path_for_prompt(path: str) -> str:
@@ -390,9 +391,28 @@ def _trim_paths_for_prompt(paths, max_items: int):
     ]
 
 
+def _extract_directory_prefixes_for_prompt(paths, max_depth: int = _MAX_FOLDER_PATH_DEPTH):
+    directories = set()
+    for path in paths:
+        normalized = _normalize_path_for_prompt(path)
+        if not normalized or normalized.startswith("... ("):
+            continue
+
+        parent = os.path.dirname(normalized).replace("\\", "/").strip("/")
+        if not parent:
+            continue
+
+        parts = [part for part in parent.split("/") if part]
+        for idx in range(1, min(len(parts), max_depth) + 1):
+            directories.add("/".join(parts[:idx]))
+
+    return sorted(directories)
+
+
 def _build_directory_context_payload(max_chars: int = 18000) -> str:
     archive_files = _sorted_visible_paths(filesystem.list_archive_files())
     indexed_files = _sorted_visible_paths(chroma.list_indexed_paths())
+    existing_directories = _extract_directory_prefixes_for_prompt(archive_files)
 
     archive_set = set(archive_files)
     indexed_set = set(indexed_files)
@@ -420,6 +440,9 @@ def _build_directory_context_payload(max_chars: int = 18000) -> str:
                 "unindexed_file_count": len(unindexed_files),
                 "db_only_record_count": len(db_only_records),
             },
+            "existing_directories": _trim_paths_for_prompt(
+                existing_directories, variant["archive"]
+            ),
             # Files currently present in archive (whether indexed or not).
             "archive_files": _trim_paths_for_prompt(archive_files, variant["archive"]),
             # Files known to Chroma index.
@@ -446,6 +469,7 @@ def _build_directory_context_payload(max_chars: int = 18000) -> str:
             "unindexed_file_count": len(unindexed_files),
             "db_only_record_count": len(db_only_records),
         },
+        "existing_directories": _trim_paths_for_prompt(existing_directories, 200),
         "unindexed_archive_files": _trim_paths_for_prompt(unindexed_files, 120),
         "db_only_index_records": _trim_paths_for_prompt(db_only_records, 120),
     }
@@ -1284,7 +1308,7 @@ def sanitize_path_suggestion(suggested_path, filename):
 
     # Rebuild the path
     sanitized_parts = [segment for segment in path_parts if segment]
-    sanitized_path = "/".join(sanitized_parts[:3])
+    sanitized_path = "/".join(sanitized_parts[:_MAX_FOLDER_PATH_DEPTH])
 
     # Make sure we don't have an empty path
     if not sanitized_path:
