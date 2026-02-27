@@ -14,6 +14,9 @@ class SettingsWindowManager {
     static let shared = SettingsWindowManager()
     
     private var window: SettingsHostingWindow?
+    var isVisible: Bool {
+        window?.isVisible ?? false
+    }
     
     private init() {}
     
@@ -66,6 +69,7 @@ class SettingsWindowManager {
     }
     
     func hide() {
+        guard isVisible else { return }
         window?.orderOut(nil)
     }
 } 

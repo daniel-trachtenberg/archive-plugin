@@ -311,8 +311,7 @@ struct ArchiveMacApp: App {
             uploadFiles()
         }
         .onChange(of: hotkeyBridge.settingsSignal) { _, _ in
-            isSettingsViewShowing = true
-            showSettingsWindow()
+            toggleSettingsWindow()
         }
     }
 
@@ -361,6 +360,17 @@ struct ArchiveMacApp: App {
         )
 
         SettingsWindowManager.shared.show(with: settingsView)
+    }
+
+    private func toggleSettingsWindow() {
+        if SettingsWindowManager.shared.isVisible {
+            isSettingsViewShowing = false
+            SettingsWindowManager.shared.hide()
+            return
+        }
+
+        isSettingsViewShowing = true
+        showSettingsWindow()
     }
 
     private func showOnboardingWindow() {
