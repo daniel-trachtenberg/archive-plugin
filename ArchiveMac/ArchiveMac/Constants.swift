@@ -7,9 +7,9 @@ enum UIConstants {
     static let searchWindowMaxResultsHeight: CGFloat = 360
     
     // Upload window dimensions
-    static let uploadWindowWidth: CGFloat = 500
-    static let uploadWindowHeight: CGFloat = 350
-    static let uploadDragAreaHeight: CGFloat = 180
+    static let uploadWindowWidth: CGFloat = 560
+    static let uploadWindowHeight: CGFloat = 360
+    static let uploadDragAreaHeight: CGFloat = 210
     
     // Settings window dimensions
     static let settingsWindowWidth: CGFloat = 680

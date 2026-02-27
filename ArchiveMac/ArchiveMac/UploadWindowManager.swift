@@ -31,23 +31,25 @@ class UploadWindowManager {
             
             window = UploadHostingWindow(
                 contentRect: contentRect,
-                styleMask: [.titled, .closable, .miniaturizable],
+                styleMask: [.borderless],
                 backing: .buffered,
                 defer: false
             )
             
             window?.isReleasedWhenClosed = false
-            window?.backgroundColor = NSColor.windowBackgroundColor
-            window?.isOpaque = true
+            window?.backgroundColor = .clear
+            window?.isOpaque = false
             window?.hasShadow = true
-            window?.level = .normal
+            window?.level = .floating
             window?.title = "Upload Files"
-            window?.titleVisibility = .visible
-            window?.titlebarAppearsTransparent = false
+            window?.titleVisibility = .hidden
+            window?.titlebarAppearsTransparent = true
+            window?.animationBehavior = .utilityWindow
+            window?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             
             // Make sure this window is properly configured for key status
             window?.acceptsMouseMovedEvents = true
-            window?.isMovableByWindowBackground = false
+            window?.isMovableByWindowBackground = true
         }
         
         let hostingController = NSHostingController(rootView: uploadView)
@@ -57,7 +59,7 @@ class UploadWindowManager {
         if let screenFrame = NSScreen.main?.visibleFrame {
             let windowFrame = NSRect(
                 x: screenFrame.midX - UIConstants.uploadWindowWidth / 2,
-                y: screenFrame.midY - UIConstants.uploadWindowHeight / 2,
+                y: screenFrame.maxY - UIConstants.uploadWindowHeight - 150,
                 width: UIConstants.uploadWindowWidth,
                 height: UIConstants.uploadWindowHeight
             )
@@ -65,6 +67,7 @@ class UploadWindowManager {
         }
         
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
     }
     
