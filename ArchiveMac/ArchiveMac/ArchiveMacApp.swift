@@ -217,8 +217,7 @@ struct ArchiveMacApp: App {
             ) { _ in
                 Self.startupRetryWorkItems.forEach { $0.cancel() }
                 Self.startupRetryWorkItems.removeAll()
-                BackendService.shared.stopLifecycleMonitoring()
-                BackendService.shared.stopManagedBackend()
+                BackendService.shared.shutdownForApplicationTermination()
             }
 
             Self.launchObserver = NotificationCenter.default.addObserver(

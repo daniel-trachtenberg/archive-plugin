@@ -15,6 +15,7 @@ import requests
 from contextlib import asynccontextmanager
 import shutil
 import time
+import signal
 import services.filesystem_service as filesystem
 import services.chroma_service as chroma
 
@@ -47,6 +48,15 @@ _OLLAMA_HEALTH_CACHE = {
     "status": "unknown",
 }
 
+_MANAGED_BY_APP = (
+    os.getenv("ARCHIVE_MANAGED_BY_APP", "").strip().lower() in {"1", "true", "yes", "on"}
+)
+try:
+    _MANAGED_APP_PID = int((os.getenv("ARCHIVE_APP_PID", "") or "0").strip())
+except ValueError:
+    _MANAGED_APP_PID = 0
+_PARENT_WATCHDOG_STARTED = False
+
 DOCUMENT_EXTENSIONS = (
     ".pdf",
     ".txt",
@@ -62,6 +72,43 @@ DOCUMENT_EXTENSIONS = (
 )
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _start_parent_watchdog_if_managed():
+    global _PARENT_WATCHDOG_STARTED
+
+    if _PARENT_WATCHDOG_STARTED:
+        return
+    if not _MANAGED_BY_APP or _MANAGED_APP_PID <= 1:
+        return
+
+    _PARENT_WATCHDOG_STARTED = True
+
+    def _watch_parent():
+        while True:
+            if not _is_pid_alive(_MANAGED_APP_PID):
+                logging.warning(
+                    "Managed backend detected missing app parent pid=%s; exiting.",
+                    _MANAGED_APP_PID,
+                )
+                os._exit(0)
+            time.sleep(3.0)
+
+    threading.Thread(
+        target=_watch_parent,
+        daemon=True,
+        name="archive-parent-watchdog",
+    ).start()
 
 
 def _run_reconciliation_worker():
@@ -238,6 +285,7 @@ async def lifespan(app: FastAPI):
         print("\n=================================================")
         print("          STARTING ARCHIVE PLUGIN SERVER         ")
         print("=================================================")
+        _start_parent_watchdog_if_managed()
 
         # Start the file watchers
         print("\nInitializing file watchers...")
@@ -1048,6 +1096,9 @@ def health_check():
             if input_exists and archive_exists and llm_runtime_ok
             else "warning"
         ),
+        "pid": os.getpid(),
+        "managed_by_app": _MANAGED_BY_APP,
+        "managed_app_pid": _MANAGED_APP_PID if _MANAGED_BY_APP else None,
         "provider": provider,
         "input_dir": {"path": settings.INPUT_DIR, "exists": input_exists},
         "watch_input_dir": settings.WATCH_INPUT_DIR,
@@ -1055,6 +1106,17 @@ def health_check():
         "ollama": ollama_status,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@app.post("/shutdown")
+def shutdown_backend():
+    def _terminate():
+        # Return response first, then terminate process.
+        time.sleep(0.15)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=_terminate, daemon=True, name="archive-shutdown").start()
+    return {"status": "shutting_down", "pid": os.getpid()}
 
 
 if __name__ == "__main__":

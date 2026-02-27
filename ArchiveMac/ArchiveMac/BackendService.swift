@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 final class BackendService {
@@ -52,7 +53,26 @@ final class BackendService {
         }
     }
 
+    func shutdownForApplicationTermination(timeout: TimeInterval = 8.0) {
+        let semaphore = DispatchSemaphore(value: 0)
+        queue.async { [weak self] in
+            self?.stopLifecycleMonitoringSync()
+            self?.stopManagedBackendSync(force: true)
+            _ = self?.stopUnmanagedBackendIfPresentSync()
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + timeout)
+    }
+
     private func startIfNeededSync() {
+        if process == nil, isBackendHealthy(timeout: 1.0) {
+            if !stopUnmanagedBackendIfPresentSync() {
+                unhealthyRunningChecks = 0
+                return
+            }
+        }
+
         if isBackendHealthy(timeout: 1.0) {
             unhealthyRunningChecks = 0
             return
@@ -102,12 +122,37 @@ final class BackendService {
         log("Backend process started but health check timed out.")
     }
 
-    private func stopManagedBackendSync() {
-        guard let process, process.isRunning else {
+    private func stopManagedBackendSync(force: Bool = false) {
+        guard let process else {
+            return
+        }
+
+        logPipe?.fileHandleForReading.readabilityHandler = nil
+
+        if !process.isRunning {
+            self.process = nil
+            self.logPipe = nil
+            unhealthyRunningChecks = 0
             return
         }
 
         process.terminate()
+        let gracefulDeadline = Date().addingTimeInterval(force ? 1.5 : 4.0)
+        while process.isRunning && Date() < gracefulDeadline {
+            usleep(100_000)
+        }
+
+        if process.isRunning {
+            let pid = process.processIdentifier
+            log("Managed backend did not terminate gracefully. Sending SIGKILL to pid \(pid).")
+            _ = kill(pid, SIGKILL)
+
+            let killDeadline = Date().addingTimeInterval(1.5)
+            while process.isRunning && Date() < killDeadline {
+                usleep(50_000)
+            }
+        }
+
         self.process = nil
         self.logPipe = nil
         unhealthyRunningChecks = 0
@@ -152,6 +197,8 @@ final class BackendService {
 
         environment["HOST"] = host
         environment["PORT"] = String(port)
+        environment["ARCHIVE_MANAGED_BY_APP"] = "1"
+        environment["ARCHIVE_APP_PID"] = String(getpid())
         if let envFileURL {
             environment["ARCHIVE_ENV_PATH"] = envFileURL.path
         }
@@ -354,6 +401,168 @@ final class BackendService {
         }
 
         return healthy
+    }
+
+    private func stopUnmanagedBackendIfPresentSync() -> Bool {
+        guard process == nil else {
+            return true
+        }
+
+        guard isBackendHealthy(timeout: 0.9) else {
+            return true
+        }
+
+        log("Detected backend process not managed by current app instance. Attempting to stop it.")
+        let requestedShutdown = requestBackendShutdown(timeout: 1.5)
+        if requestedShutdown {
+            waitForBackendToStop(timeout: 4.0)
+        }
+
+        if isBackendHealthy(timeout: 0.9) {
+            _ = terminateListeningBackendProcessIfKnown()
+            waitForBackendToStop(timeout: 2.0)
+        }
+
+        if isBackendHealthy(timeout: 0.9) {
+            log("Unable to stop unmanaged backend process; skipping managed restart to avoid port conflict.")
+            return false
+        }
+
+        log("Stopped unmanaged backend process.")
+        return true
+    }
+
+    private func requestBackendShutdown(timeout: TimeInterval) -> Bool {
+        let shutdownURL = baseURL.appendingPathComponent("shutdown")
+        var request = URLRequest(url: shutdownURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var accepted = false
+
+        let task = URLSession.shared.dataTask(with: request) { _, response, _ in
+            defer { semaphore.signal() }
+            guard let http = response as? HTTPURLResponse else {
+                return
+            }
+            accepted = (200...299).contains(http.statusCode)
+        }
+
+        task.resume()
+        let waited = semaphore.wait(timeout: .now() + timeout + 0.5)
+        if waited == .timedOut {
+            task.cancel()
+            return false
+        }
+
+        return accepted
+    }
+
+    private func waitForBackendToStop(timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(max(timeout, 0))
+        while Date() < deadline {
+            if !isBackendHealthy(timeout: 0.4) {
+                return
+            }
+            usleep(150_000)
+        }
+    }
+
+    private func terminateListeningBackendProcessIfKnown() -> Bool {
+        guard let pid = listeningPIDForBackendPort() else {
+            return false
+        }
+
+        guard let command = commandLineForPID(pid), isLikelyArchiveBackendCommand(command) else {
+            log("Refusing to kill pid \(pid) because it does not look like Archive backend.")
+            return false
+        }
+
+        log("Sending SIGTERM to unmanaged backend pid \(pid).")
+        _ = kill(pid, SIGTERM)
+        waitForBackendToStop(timeout: 1.5)
+
+        if isBackendHealthy(timeout: 0.7) {
+            log("Unmanaged backend pid \(pid) still running. Sending SIGKILL.")
+            _ = kill(pid, SIGKILL)
+        }
+
+        return true
+    }
+
+    private func listeningPIDForBackendPort() -> Int32? {
+        let output = runCommand(
+            executable: "/usr/sbin/lsof",
+            arguments: ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"],
+            timeout: 2.0
+        )
+
+        guard let output else {
+            return nil
+        }
+
+        let firstLine = output
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let pid = Int32(firstLine), pid > 1 else {
+            return nil
+        }
+        return pid
+    }
+
+    private func commandLineForPID(_ pid: Int32) -> String? {
+        let output = runCommand(
+            executable: "/bin/ps",
+            arguments: ["-p", String(pid), "-o", "command="],
+            timeout: 2.0
+        )
+        return output?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func runCommand(executable: String, arguments: [String], timeout: TimeInterval) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        let waitDeadline = Date().addingTimeInterval(max(timeout, 0.2))
+        while process.isRunning && Date() < waitDeadline {
+            usleep(50_000)
+        }
+
+        if process.isRunning {
+            process.terminate()
+            usleep(100_000)
+            if process.isRunning {
+                _ = kill(process.processIdentifier, SIGKILL)
+            }
+            return nil
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard !data.isEmpty else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func isLikelyArchiveBackendCommand(_ command: String) -> Bool {
+        let normalized = command.lowercased()
+        return normalized.contains("/backend/main.py")
+            || normalized.contains("archivemac.app/contents/resources/backend")
+            || normalized.contains("archive-plugin/backend")
     }
 
     private static func resolveHost() -> String {

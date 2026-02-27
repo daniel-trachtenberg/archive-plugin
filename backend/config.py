@@ -34,7 +34,7 @@ class Settings:
     APP_DESCRIPTION: str = (
         "An application for managing local file organization and categorizations."
     )
-    APP_VERSION: str = "1.0.11"
+    APP_VERSION: str = "1.2.0"
 
     # FastAPI server configuration
     HOST: str = os.getenv("HOST", "0.0.0.0")
