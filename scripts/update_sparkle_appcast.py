@@ -85,9 +85,9 @@ def main() -> int:
     parser.add_argument("--minimum-system-version", default="")
     parser.add_argument("--pub-date", default="")
     parser.add_argument("--title", default="")
-    parser.add_argument("--channel-title", default="ArchiveMac Updates")
+    parser.add_argument("--channel-title", default="Archive Updates")
     parser.add_argument("--channel-link", default="https://github.com/daniel-trachtenberg/archive-plugin/releases")
-    parser.add_argument("--channel-description", default="Latest updates for ArchiveMac.")
+    parser.add_argument("--channel-description", default="Latest updates for Archive.")
     args = parser.parse_args()
 
     appcast_path = Path(args.appcast)

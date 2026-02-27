@@ -8,7 +8,7 @@ Users should be able to:
 
 1. Click `Download` on the landing page.
 2. Open a `.dmg`.
-3. Drag `ArchiveMac.app` into Applications.
+3. Drag `Archive.app` into Applications.
 4. Launch without Terminal setup.
 
 ## Current Foundation in Repo
@@ -73,8 +73,8 @@ NOTARY_PROFILE="archive-notary" \
 Output:
 
 - Archive: `dist/ArchiveMac.xcarchive`
-- DMG: `dist/ArchiveMac-<version>.dmg`
-- Checksum file: `dist/ArchiveMac-<version>.dmg.sha256`
+- DMG: `dist/Archive.dmg`
+- Checksum file: `dist/Archive.dmg.sha256`
 
 Important release-script flags:
 
@@ -87,7 +87,7 @@ Important release-script flags:
 ## Publish
 
 1. Create Git tag and GitHub Release.
-2. Upload `dist/ArchiveMac-<version>.dmg` as a release asset.
+2. Upload `dist/Archive.dmg` as a release asset.
 3. Add checksum to release notes.
 4. Commit/push updated `appcast.xml` after the release is published.
 5. Point landing-page button to the latest release asset URL.
@@ -121,7 +121,7 @@ Required GitHub repository secrets:
 2. Verify Gatekeeper on the DMG:
 
 ```bash
-spctl -a -vv --type open dist/ArchiveMac-<version>.dmg
+spctl -a -vv --type open dist/Archive.dmg
 ```
 
 3. Verify Sparkle `Check for Updates` offers the latest appcast item.

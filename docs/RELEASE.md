@@ -74,8 +74,8 @@ NOTARY_PROFILE="archive-notary" \
 
 Expected artifacts:
 
-- `dist/ArchiveMac-<version>.dmg`
-- `dist/ArchiveMac-<version>.dmg.sha256`
+- `dist/Archive.dmg`
+- `dist/Archive.dmg.sha256`
 
 With `SPARKLE_ENABLED=1` (default), the script also:
 
@@ -86,8 +86,8 @@ With `SPARKLE_ENABLED=1` (default), the script also:
 
 ```bash
 gh release create v1.0.1 \
-  dist/ArchiveMac-1.0.1.dmg \
-  dist/ArchiveMac-1.0.1.dmg.sha256 \
+  dist/Archive.dmg \
+  dist/Archive.dmg.sha256 \
   --repo daniel-trachtenberg/archive-plugin \
   --title "v1.0.1" \
   --notes "Release notes here"

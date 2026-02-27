@@ -29,7 +29,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		4EDCFB212DAB0B7800C80031 /* ArchiveMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ArchiveMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4EDCFB212DAB0B7800C80031 /* Archive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Archive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EDCFB2F2DAB0B7900C80031 /* ArchiveMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArchiveMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EDCFB392DAB0B7900C80031 /* ArchiveMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArchiveMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -92,7 +92,7 @@
 		4EDCFB222DAB0B7800C80031 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				4EDCFB212DAB0B7800C80031 /* ArchiveMac.app */,
+				4EDCFB212DAB0B7800C80031 /* Archive.app */,
 				4EDCFB2F2DAB0B7900C80031 /* ArchiveMacTests.xctest */,
 				4EDCFB392DAB0B7900C80031 /* ArchiveMacUITests.xctest */,
 			);
@@ -123,7 +123,7 @@
 				4EDCFC092DAC617300C80031 /* HotKey */,
 			);
 			productName = "llama-stack";
-			productReference = 4EDCFB212DAB0B7800C80031 /* ArchiveMac.app */;
+			productReference = 4EDCFB212DAB0B7800C80031 /* Archive.app */;
 			productType = "com.apple.product-type.application";
 		};
 		4EDCFB2E2DAB0B7900C80031 /* ArchiveMacTests */ = {
@@ -429,7 +429,7 @@
 				);
 					MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.evanadami7.ArchiveMac;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Archive;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -460,7 +460,7 @@
 				);
 					MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.evanadami7.ArchiveMac;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Archive;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -482,7 +482,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ArchiveMac.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ArchiveMac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Archive.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Archive";
 			};
 			name = Debug;
 		};
@@ -500,7 +500,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ArchiveMac.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ArchiveMac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Archive.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Archive";
 			};
 			name = Release;
 		};

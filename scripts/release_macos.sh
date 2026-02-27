@@ -8,7 +8,7 @@ PROJECT_PATH="${PROJECT_PATH:-$ROOT_DIR/ArchiveMac/ArchiveMac.xcodeproj}"
 SCHEME="${SCHEME:-ArchiveMac}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$DIST_DIR/ArchiveMac.xcarchive}"
-APP_NAME="${APP_NAME:-ArchiveMac.app}"
+APP_NAME="${APP_NAME:-Archive.app}"
 APP_PATH="$ARCHIVE_PATH/Products/Applications/$APP_NAME"
 BACKEND_SRC_DIR="${BACKEND_SRC_DIR:-$ROOT_DIR/backend}"
 BACKEND_DEST_DIR="$APP_PATH/Contents/Resources/backend"
@@ -137,11 +137,11 @@ if [[ "$SPARKLE_ENABLED" == "1" ]]; then
   done
 fi
 
-DMG_PATH="${DMG_PATH:-$DIST_DIR/ArchiveMac-${VERSION}.dmg}"
+DMG_PATH="${DMG_PATH:-$DIST_DIR/Archive.dmg}"
 DMG_STAGING_DIR="$DIST_DIR/dmg-staging"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-Archive Plugin}"
 DMG_ICON_ICNS="${DMG_ICON_ICNS:-$ROOT_DIR/branding/ArchiveVolume.icns}"
-DMG_RW_PATH="$DIST_DIR/ArchiveMac-${VERSION}-rw.dmg"
+DMG_RW_PATH="$DIST_DIR/Archive-rw.dmg"
 DMG_MOUNTPOINT="$DIST_DIR/dmg-mount"
 
 rm -rf "$DMG_STAGING_DIR"
