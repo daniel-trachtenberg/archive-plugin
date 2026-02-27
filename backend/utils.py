@@ -2,24 +2,62 @@ import services.filesystem_service as filesystem
 import services.llm_service as llm
 import services.chroma_service as chroma
 import services.move_log_service as move_logs
-from PyPDF2 import PdfReader
 import base64
 import io
 import os
 import logging
 import json
-from pptx import Presentation
 import shutil
 from config import settings
 from datetime import datetime
 from time import monotonic
-import docx
-import pandas as pd
+
+_PDF_READER_CLASS = None
+_PRESENTATION_CLASS = None
+_DOCX_MODULE = None
+_PANDAS_MODULE = None
+
+
+def _get_pdf_reader_class():
+    global _PDF_READER_CLASS
+    if _PDF_READER_CLASS is None:
+        from PyPDF2 import PdfReader
+
+        _PDF_READER_CLASS = PdfReader
+    return _PDF_READER_CLASS
+
+
+def _get_presentation_class():
+    global _PRESENTATION_CLASS
+    if _PRESENTATION_CLASS is None:
+        from pptx import Presentation
+
+        _PRESENTATION_CLASS = Presentation
+    return _PRESENTATION_CLASS
+
+
+def _get_docx_module():
+    global _DOCX_MODULE
+    if _DOCX_MODULE is None:
+        import docx
+
+        _DOCX_MODULE = docx
+    return _DOCX_MODULE
+
+
+def _get_pandas_module():
+    global _PANDAS_MODULE
+    if _PANDAS_MODULE is None:
+        import pandas as pd
+
+        _PANDAS_MODULE = pd
+    return _PANDAS_MODULE
 
 
 def extract_text_from_pdf(file_content):
     try:
-        reader = PdfReader(io.BytesIO(file_content))
+        pdf_reader_class = _get_pdf_reader_class()
+        reader = pdf_reader_class(io.BytesIO(file_content))
         full_text = []
         for page in reader.pages:
             page_text = page.extract_text()
@@ -36,7 +74,8 @@ def extract_text_from_pptx(file_content):
     Extract text from PowerPoint .pptx file.
     """
     try:
-        prs = Presentation(io.BytesIO(file_content))
+        presentation_class = _get_presentation_class()
+        prs = presentation_class(io.BytesIO(file_content))
         full_text = []
 
         logging.info(
@@ -110,7 +149,8 @@ def extract_text_from_docx(file_content):
     Extract text from Word .docx file.
     """
     try:
-        doc = docx.Document(io.BytesIO(file_content))
+        docx_module = _get_docx_module()
+        doc = docx_module.Document(io.BytesIO(file_content))
         full_text = []
 
         # Extract text from paragraphs
@@ -151,6 +191,7 @@ def extract_text_from_excel(file_content):
     Extract text from Excel .xls/.xlsx files.
     """
     try:
+        pd = _get_pandas_module()
         excel_file = io.BytesIO(file_content)
 
         # Try different engines if needed
@@ -345,8 +386,9 @@ def limit_text_for_llm(text, max_chars=8192):
     return text[:max_chars]
 
 
-_DIRECTORY_CONTEXT_CACHE = {"value": "", "created_at": 0.0}
-_DIRECTORY_CONTEXT_CACHE_TTL_SECONDS = 10
+_DIRECTORY_CONTEXT_CACHE = {"value": "", "created_at": 0.0, "dirty": False}
+_DIRECTORY_CONTEXT_CACHE_TTL_SECONDS = 90
+_DIRECTORY_CONTEXT_DIRTY_GRACE_SECONDS = 25
 _MAX_FOLDER_PATH_DEPTH = 7
 
 
@@ -477,8 +519,12 @@ def _build_directory_context_payload(max_chars: int = 18000) -> str:
 
 
 def _invalidate_directory_context_cache():
-    _DIRECTORY_CONTEXT_CACHE["value"] = ""
+    if _DIRECTORY_CONTEXT_CACHE["value"]:
+        _DIRECTORY_CONTEXT_CACHE["dirty"] = True
+        return
+
     _DIRECTORY_CONTEXT_CACHE["created_at"] = 0.0
+    _DIRECTORY_CONTEXT_CACHE["dirty"] = False
 
 
 def directory_structure_for_llm(force_refresh: bool = False):
@@ -495,6 +541,10 @@ def directory_structure_for_llm(force_refresh: bool = False):
         not force_refresh
         and _DIRECTORY_CONTEXT_CACHE["value"]
         and cache_age < _DIRECTORY_CONTEXT_CACHE_TTL_SECONDS
+        and (
+            not _DIRECTORY_CONTEXT_CACHE["dirty"]
+            or cache_age < _DIRECTORY_CONTEXT_DIRTY_GRACE_SECONDS
+        )
     ):
         return _DIRECTORY_CONTEXT_CACHE["value"]
 
@@ -502,12 +552,14 @@ def directory_structure_for_llm(force_refresh: bool = False):
         context = _build_directory_context_payload(max_chars=18000)
         _DIRECTORY_CONTEXT_CACHE["value"] = context
         _DIRECTORY_CONTEXT_CACHE["created_at"] = now
+        _DIRECTORY_CONTEXT_CACHE["dirty"] = False
         return context
     except Exception as e:
         logging.error(f"Failed building llm directory context: {e}")
         fallback = filesystem.directory_tree_for_llm(max_entries=800)
         _DIRECTORY_CONTEXT_CACHE["value"] = fallback
         _DIRECTORY_CONTEXT_CACHE["created_at"] = now
+        _DIRECTORY_CONTEXT_CACHE["dirty"] = False
         return fallback
 
 
@@ -1391,7 +1443,10 @@ async def reconcile_filesystem_with_chroma():
                 return False
 
             # Get all document IDs from the collection
-            chroma_content = collection.get()
+            try:
+                chroma_content = collection.get(include=[])
+            except Exception:
+                chroma_content = collection.get()
             chroma_files = set(
                 chroma_content["ids"]
                 if chroma_content

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from endpoints import router
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import utils
@@ -31,7 +32,20 @@ global_observer = None
 global_event_handler = None
 global_archive_observer = None
 global_archive_event_handler = None
+global_observer_thread = None
+global_archive_observer_thread = None
 observer_lock = threading.Lock()
+
+_reconciliation_lock = threading.Lock()
+_reconciliation_timer = None
+_reconciliation_pending = False
+_reconciliation_running = False
+
+_OLLAMA_HEALTH_CACHE_TTL_SECONDS = 30
+_OLLAMA_HEALTH_CACHE = {
+    "checked_at": 0.0,
+    "status": "unknown",
+}
 
 DOCUMENT_EXTENSIONS = (
     ".pdf",
@@ -50,19 +64,93 @@ DOCUMENT_EXTENSIONS = (
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
 
 
+def _run_reconciliation_worker():
+    global _reconciliation_running, _reconciliation_pending
+
+    while True:
+        with _reconciliation_lock:
+            if _reconciliation_running:
+                return
+            if not _reconciliation_pending:
+                return
+            _reconciliation_pending = False
+            _reconciliation_running = True
+
+        try:
+            asyncio.run(utils.reconcile_filesystem_with_chroma())
+        except Exception as exc:
+            logging.error("Reconciliation worker failed: %s", exc)
+        finally:
+            with _reconciliation_lock:
+                _reconciliation_running = False
+                should_rerun = _reconciliation_pending
+
+        if not should_rerun:
+            return
+
+        # Coalesce bursts into a single follow-up run.
+        time.sleep(1.0)
+
+
+def schedule_reconciliation(*, reason: str = "", debounce_seconds: float = 2.0):
+    global _reconciliation_timer, _reconciliation_pending
+
+    with _reconciliation_lock:
+        _reconciliation_pending = True
+        if _reconciliation_timer is not None:
+            _reconciliation_timer.cancel()
+
+        def _dispatch():
+            _run_reconciliation_worker()
+
+        timer = threading.Timer(max(float(debounce_seconds), 0.0), _dispatch)
+        timer.daemon = True
+        _reconciliation_timer = timer
+        timer.start()
+
+    if reason:
+        logging.info("Scheduled reconciliation (%s) with debounce %.1fs", reason, debounce_seconds)
+
+
+def _cached_ollama_status() -> str:
+    now = time.monotonic()
+    last_checked = _OLLAMA_HEALTH_CACHE["checked_at"]
+    if now - last_checked < _OLLAMA_HEALTH_CACHE_TTL_SECONDS:
+        return _OLLAMA_HEALTH_CACHE["status"]
+
+    status = "not_running"
+    try:
+        response = requests.get(f"{settings.OLLAMA_BASE_URL}", timeout=0.8)
+        status = "running" if response.status_code == 200 else "error"
+    except Exception:
+        status = "not_running"
+
+    _OLLAMA_HEALTH_CACHE["checked_at"] = now
+    _OLLAMA_HEALTH_CACHE["status"] = status
+    return status
+
+
 # Function to restart file watcher with new directory
 def restart_file_watcher():
     global global_observer, global_event_handler, global_archive_observer, global_archive_event_handler
+    global global_observer_thread, global_archive_observer_thread
 
     with observer_lock:
         print("\n---------- RESTARTING FILE WATCHERS ----------")
         # Stop existing input observer if it's running
-        if global_observer and global_observer.is_alive():
+        if global_observer:
             logging.info("Stopping existing input file watcher...")
             print("Stopping input directory watcher...")
             global_observer.stop()
-            global_observer.join()
+        if global_event_handler and global_event_handler.loop.is_running():
+            global_event_handler.loop.call_soon_threadsafe(global_event_handler.loop.stop)
+        if global_observer and global_observer.is_alive():
+            global_observer.join(timeout=2)
             logging.info("Existing input file watcher stopped")
+        if global_observer_thread and global_observer_thread.is_alive():
+            global_observer_thread.join(timeout=2)
+        if global_event_handler:
+            global_event_handler.shutdown()
 
         # Update input watcher based on settings.
         if settings.WATCH_INPUT_DIR:
@@ -71,29 +159,41 @@ def restart_file_watcher():
             observer.schedule(event_handler, path=settings.INPUT_DIR, recursive=True)
 
             # Start the new input observer
-            threading.Thread(
+            input_observer_thread = threading.Thread(
                 target=_run_observer_with_event_loop,
                 args=(observer, event_handler.loop),
                 daemon=True,
-            ).start()
+            )
+            input_observer_thread.start()
             print(f"Started watching input directory: {settings.INPUT_DIR}")
 
             # Update global references for input watcher
             global_observer = observer
             global_event_handler = event_handler
+            global_observer_thread = input_observer_thread
         else:
             print("Input directory watcher is disabled in settings")
             logging.info("Input directory watcher is disabled in settings")
             global_observer = None
             global_event_handler = None
+            global_observer_thread = None
 
         # Stop existing archive observer if it's running
-        if global_archive_observer and global_archive_observer.is_alive():
+        if global_archive_observer:
             logging.info("Stopping existing archive file watcher...")
             print("Stopping archive directory watcher...")
             global_archive_observer.stop()
-            global_archive_observer.join()
+        if global_archive_event_handler and global_archive_event_handler.loop.is_running():
+            global_archive_event_handler.loop.call_soon_threadsafe(
+                global_archive_event_handler.loop.stop
+            )
+        if global_archive_observer and global_archive_observer.is_alive():
+            global_archive_observer.join(timeout=2)
             logging.info("Existing archive file watcher stopped")
+        if global_archive_observer_thread and global_archive_observer_thread.is_alive():
+            global_archive_observer_thread.join(timeout=2)
+        if global_archive_event_handler:
+            global_archive_event_handler.shutdown()
 
         # Create a new archive observer
         archive_event_handler = ArchiveDirectoryHandler()
@@ -103,16 +203,18 @@ def restart_file_watcher():
         )
 
         # Start the new archive observer
-        threading.Thread(
+        archive_observer_thread = threading.Thread(
             target=_run_observer_with_event_loop,
             args=(archive_observer, archive_event_handler.loop),
             daemon=True,
-        ).start()
+        )
+        archive_observer_thread.start()
         print(f"Started watching archive directory: {settings.ARCHIVE_DIR}")
 
         # Update global references for archive watcher
         global_archive_observer = archive_observer
         global_archive_event_handler = archive_event_handler
+        global_archive_observer_thread = archive_observer_thread
 
         print("File watchers restarted successfully")
         print("---------------------------------------------\n")
@@ -130,6 +232,7 @@ def restart_file_watcher():
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     global global_observer, global_event_handler, global_archive_observer, global_archive_event_handler
+    global global_observer_thread, global_archive_observer_thread
 
     try:
         print("\n=================================================")
@@ -143,16 +246,11 @@ async def lifespan(app: FastAPI):
         print(f"Input watcher enabled: {settings.WATCH_INPUT_DIR}")
         print(f"Archive directory: {settings.ARCHIVE_DIR}")
 
-        # Run the reconciliation on startup
+        # Run a debounced reconciliation on startup.
         print("\nStarting database reconciliation process...")
         print("This will ensure ChromaDB and the filesystem are in sync.")
         print("See details below:\n")
-
-        reconciliation_thread = threading.Thread(
-            target=lambda: asyncio.run(utils.reconcile_filesystem_with_chroma()),
-            daemon=True,
-        )
-        reconciliation_thread.start()
+        schedule_reconciliation(reason="startup", debounce_seconds=0.5)
 
         print("\nServer ready! Monitoring for file changes...")
         print("=================================================\n")
@@ -169,19 +267,35 @@ async def lifespan(app: FastAPI):
     print("=================================================")
 
     with observer_lock:
-        if global_observer and global_observer.is_alive():
+        if global_observer:
             logging.info("Stopping input file watcher...")
             print("Stopping input directory watcher...")
             global_observer.stop()
-            global_observer.join()
+        if global_event_handler and global_event_handler.loop.is_running():
+            global_event_handler.loop.call_soon_threadsafe(global_event_handler.loop.stop)
+        if global_observer and global_observer.is_alive():
+            global_observer.join(timeout=2)
             logging.info("Input file watcher stopped")
+        if global_observer_thread and global_observer_thread.is_alive():
+            global_observer_thread.join(timeout=2)
+        if global_event_handler:
+            global_event_handler.shutdown()
 
-        if global_archive_observer and global_archive_observer.is_alive():
+        if global_archive_observer:
             logging.info("Stopping archive file watcher...")
             print("Stopping archive directory watcher...")
             global_archive_observer.stop()
-            global_archive_observer.join()
+        if global_archive_event_handler and global_archive_event_handler.loop.is_running():
+            global_archive_event_handler.loop.call_soon_threadsafe(
+                global_archive_event_handler.loop.stop
+            )
+        if global_archive_observer and global_archive_observer.is_alive():
+            global_archive_observer.join(timeout=2)
             logging.info("Archive file watcher stopped")
+        if global_archive_observer_thread and global_archive_observer_thread.is_alive():
+            global_archive_observer_thread.join(timeout=2)
+        if global_archive_event_handler:
+            global_archive_event_handler.shutdown()
 
     print("Server shutdown complete.")
     print("=================================================\n")
@@ -209,6 +323,25 @@ class InputDirectoryHandler(FileSystemEventHandler):
         self.processing_folders = set()
         # Keep track of folders being processed to avoid processing their files
         self.folders_being_processed = set()
+        self.state_lock = threading.Lock()
+        self.worker_pool = ThreadPoolExecutor(
+            max_workers=3,
+            thread_name_prefix="archive-input-worker",
+        )
+
+    def shutdown(self):
+        try:
+            self.worker_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception as exc:
+            logging.error("Failed shutting down input worker pool: %s", exc)
+
+    def _is_folder_in_progress_for_path(self, file_path: str, file_dir: str) -> bool:
+        with self.state_lock:
+            in_progress_folders = tuple(self.folders_being_processed)
+        return any(
+            file_path.startswith(folder) or file_dir.startswith(folder)
+            for folder in in_progress_folders
+        )
 
     def on_created(self, event):
         if event.is_directory:
@@ -220,22 +353,13 @@ class InputDirectoryHandler(FileSystemEventHandler):
                 return
 
             # Check if we're already processing this folder
-            if folder_path in self.processing_folders:
-                return
-
-            # Wait a short time to make sure the folder creation is complete
-            # This helps with race conditions that might happen with folder operations
-            time.sleep(1)
-
-            # Check if the folder still exists after the delay
-            if not os.path.exists(folder_path):
-                logging.info(
-                    f"Folder {folder_path} no longer exists, skipping processing"
-                )
-                return
-
-            # Mark this folder as being processed to avoid processing its files individually
-            self.folders_being_processed.add(folder_path)
+            with self.state_lock:
+                if (
+                    folder_path in self.processing_folders
+                    or folder_path in self.folders_being_processed
+                ):
+                    return
+                self.folders_being_processed.add(folder_path)
 
             # Give the system a moment before processing the folder
             self._process_folder_after_delay(folder_path)
@@ -245,11 +369,7 @@ class InputDirectoryHandler(FileSystemEventHandler):
         file_dir = os.path.dirname(file_path)
 
         # Skip files in folders that are already being processed
-        if any(
-            file_path.startswith(folder) for folder in self.folders_being_processed
-        ) or any(
-            file_dir.startswith(folder) for folder in self.folders_being_processed
-        ):
+        if self._is_folder_in_progress_for_path(file_path=file_path, file_dir=file_dir):
             logging.info(
                 f"Skipping file {file_path} as its parent folder is being processed"
             )
@@ -264,22 +384,23 @@ class InputDirectoryHandler(FileSystemEventHandler):
             return
 
         # Check if we're already processing this file
-        if file_path in self.processing_files:
-            return
+        with self.state_lock:
+            if file_path in self.processing_files:
+                return
+            self.processing_files.add(file_path)
 
         # Give the system a moment to finish writing the file
         self._process_file_after_delay(file_path)
 
     def _process_folder_after_delay(self, folder_path):
         """Wait before processing to ensure folder creation is complete"""
-        threading.Thread(
-            target=self._delayed_process_folder, args=(folder_path,)
-        ).start()
+        self.worker_pool.submit(self._delayed_process_folder, folder_path)
 
     def _delayed_process_folder(self, folder_path):
         """Process the folder after a short delay"""
         try:
-            self.processing_folders.add(folder_path)
+            with self.state_lock:
+                self.processing_folders.add(folder_path)
 
             # Wait a bit longer to make sure all files are copied into the folder
             # This is especially important for large folders or slow file systems
@@ -332,20 +453,17 @@ class InputDirectoryHandler(FileSystemEventHandler):
             logging.error(f"Error processing folder {folder_path}: {str(e)}")
         finally:
             # Remove folder from being processed sets
-            if folder_path in self.processing_folders:
-                self.processing_folders.remove(folder_path)
-            if folder_path in self.folders_being_processed:
-                self.folders_being_processed.remove(folder_path)
+            with self.state_lock:
+                self.processing_folders.discard(folder_path)
+                self.folders_being_processed.discard(folder_path)
 
     def _process_file_after_delay(self, file_path):
         """Wait before processing to ensure file is complete"""
-        threading.Thread(target=self._delayed_process, args=(file_path,)).start()
+        self.worker_pool.submit(self._delayed_process, file_path)
 
     def _delayed_process(self, file_path):
         """Process the file after a short delay"""
         try:
-            self.processing_files.add(file_path)
-
             # Wait for file to be fully written
             initial_size = -1
             current_size = 0
@@ -373,11 +491,7 @@ class InputDirectoryHandler(FileSystemEventHandler):
 
             # Check again if this file's directory is being processed as a folder
             file_dir = os.path.dirname(file_path)
-            if any(
-                file_path.startswith(folder) for folder in self.folders_being_processed
-            ) or any(
-                file_dir.startswith(folder) for folder in self.folders_being_processed
-            ):
+            if self._is_folder_in_progress_for_path(file_path=file_path, file_dir=file_dir):
                 logging.info(
                     f"Skipping file {file_path} as its parent folder is now being processed"
                 )
@@ -447,8 +561,8 @@ class InputDirectoryHandler(FileSystemEventHandler):
         except Exception as e:
             logging.error(f"Error processing file {file_path}: {str(e)}")
         finally:
-            if file_path in self.processing_files:
-                self.processing_files.remove(file_path)
+            with self.state_lock:
+                self.processing_files.discard(file_path)
 
 
 class ArchiveDirectoryHandler(FileSystemEventHandler):
@@ -456,6 +570,10 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
         self.loop = asyncio.new_event_loop()
         self.processing_files = set()
         self.processing_folders = set()
+
+    def shutdown(self):
+        # Placeholder for parity with input handler lifecycle management.
+        return None
 
     def _should_skip_path(self, path):
         """Helper method to determine if a path should be skipped"""
@@ -642,13 +760,10 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
                 )
 
                 try:
-                    # Start reconciliation in a background thread
-                    threading.Thread(
-                        target=lambda: asyncio.run(
-                            utils.reconcile_filesystem_with_chroma()
-                        ),
-                        daemon=True,
-                    ).start()
+                    schedule_reconciliation(
+                        reason="folder-moved-out-of-archive",
+                        debounce_seconds=1.5,
+                    )
                     print(f"✓ Started reconciliation process to clean up database")
                     logging.info(
                         f"Folder moved out of archive: {dir_relative_path}, started reconciliation"
@@ -818,13 +933,10 @@ class ArchiveDirectoryHandler(FileSystemEventHandler):
             )
 
             try:
-                # Start reconciliation in a background thread
-                threading.Thread(
-                    target=lambda: asyncio.run(
-                        utils.reconcile_filesystem_with_chroma()
-                    ),
-                    daemon=True,
-                ).start()
+                schedule_reconciliation(
+                    reason="folder-deleted-in-archive",
+                    debounce_seconds=1.5,
+                )
                 print(f"✓ Started reconciliation process to clean up database")
                 logging.info(
                     f"Folder deletion detected for {dir_relative_path}, started reconciliation"
@@ -907,28 +1019,36 @@ def _run_observer_with_event_loop(observer, loop):
     finally:
         observer.stop()
         observer.join()
+        try:
+            loop.stop()
+        except RuntimeError:
+            pass
+        try:
+            loop.close()
+        except Exception as exc:
+            logging.error("Failed closing observer loop: %s", exc)
 
 
 @app.get("/health")
-async def health_check():
+def health_check():
     # Check if input and archive directories exist
     input_exists = os.path.exists(settings.INPUT_DIR)
     archive_exists = os.path.exists(settings.ARCHIVE_DIR)
+    provider = (settings.LLM_PROVIDER or "openai").strip().lower()
 
-    # Check if Ollama is running
-    ollama_status = "unknown"
-    try:
-        response = requests.get(f"{settings.OLLAMA_BASE_URL}", timeout=2)
-        ollama_status = "running" if response.status_code == 200 else "error"
-    except:
-        ollama_status = "not_running"
+    ollama_status = "skipped"
+    llm_runtime_ok = True
+    if provider == "ollama":
+        ollama_status = _cached_ollama_status()
+        llm_runtime_ok = ollama_status == "running"
 
     return {
         "status": (
             "ok"
-            if input_exists and archive_exists and ollama_status == "running"
+            if input_exists and archive_exists and llm_runtime_ok
             else "warning"
         ),
+        "provider": provider,
         "input_dir": {"path": settings.INPUT_DIR, "exists": input_exists},
         "watch_input_dir": settings.WATCH_INPUT_DIR,
         "archive_dir": {"path": settings.ARCHIVE_DIR, "exists": archive_exists},

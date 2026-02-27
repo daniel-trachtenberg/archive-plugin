@@ -3,8 +3,22 @@ import Foundation
 class SearchService {
     static let shared = SearchService()
     private let maxRetries = 3
+    private let backendKickMinInterval: TimeInterval = 8
+    private let backendKickQueue = DispatchQueue(label: "archive.search.backend-kick")
+    private var lastBackendKickAt = Date.distantPast
     
     private init() {}
+
+    private func ensureBackendStartedIfNeeded() {
+        backendKickQueue.async {
+            let now = Date()
+            guard now.timeIntervalSince(self.lastBackendKickAt) >= self.backendKickMinInterval else {
+                return
+            }
+            self.lastBackendKickAt = now
+            BackendService.shared.startIfNeeded()
+        }
+    }
     
     // Traditional callback-based method (keep for backward compatibility)
     func search(query: String, completion: @escaping ([SearchResult]) -> Void) {
@@ -18,11 +32,11 @@ class SearchService {
     
     // Modern async/await version
     func searchAsync(query: String) async -> [SearchResult] {
-        BackendService.shared.startIfNeeded()
-
         guard !query.isEmpty else {
             return []
         }
+
+        ensureBackendStartedIfNeeded()
         
         return await performSearch(query: query, retryCount: 0)
     }

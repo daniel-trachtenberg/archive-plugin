@@ -8,7 +8,6 @@ from typing import Optional
 import requests
 
 from config import settings
-from services import image_analysis_service
 from services import credentials_service
 
 _PATH_TAG_PATTERN = re.compile(r"<suggestedpath>(.*?)</suggestedpath>", re.IGNORECASE | re.DOTALL)
@@ -128,6 +127,34 @@ _TREE_LINE_PATTERN = re.compile(
 
 _MAX_FOLDER_PATH_DEPTH = 7
 _EXISTING_PATH_CONFIDENCE_THRESHOLD = 1.5
+_LOCAL_IMAGE_ANALYSIS_MODULE = None
+
+
+def _is_local_provider_enabled() -> bool:
+    return (settings.LLM_PROVIDER or "openai").strip().lower() == "ollama"
+
+
+def _get_local_image_analysis_module():
+    """
+    Import image analysis lazily so local ML dependencies are not loaded unless
+    local provider mode is explicitly enabled.
+    """
+    global _LOCAL_IMAGE_ANALYSIS_MODULE
+
+    if not _is_local_provider_enabled():
+        return None
+
+    if _LOCAL_IMAGE_ANALYSIS_MODULE is not None:
+        return _LOCAL_IMAGE_ANALYSIS_MODULE
+
+    try:
+        from services import image_analysis_service
+
+        _LOCAL_IMAGE_ANALYSIS_MODULE = image_analysis_service
+        return _LOCAL_IMAGE_ANALYSIS_MODULE
+    except Exception as exc:
+        logging.error("Failed loading local image analysis module: %s", exc)
+        return None
 
 
 class LLMService:
@@ -325,8 +352,8 @@ def _call_model(prompt: str, *, timeout: int = 45, num_predict: int = 160) -> st
             return ""
         return _call_anthropic(prompt, timeout=timeout, num_predict=num_predict)
 
-    logging.error("Unsupported LLM provider '%s', falling back to ollama", provider)
-    return _call_ollama(prompt, timeout=timeout, num_predict=num_predict)
+    logging.error("Unsupported LLM provider '%s'", provider)
+    return ""
 
 
 def _clean_model_output(text: str) -> str:
@@ -822,10 +849,11 @@ Return XML only in this format:
 async def get_image_summary(filename: str, encoded_image: str, media_type: str) -> str:
     """Generate text summary for image embeddings/classification."""
     analysis = None
-    if encoded_image:
+    image_analysis_module = _get_local_image_analysis_module()
+    if encoded_image and image_analysis_module is not None:
         try:
             binary = base64.b64decode(encoded_image)
-            analysis = image_analysis_service.analyze_image(binary)
+            analysis = image_analysis_module.analyze_image(binary)
         except Exception as exc:
             logging.error("Failed to decode/analyze image '%s': %s", filename, exc)
 

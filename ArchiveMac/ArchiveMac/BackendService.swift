@@ -12,7 +12,7 @@ final class BackendService {
 
     private let host: String
     private let port: Int
-    private let monitorIntervalSeconds: TimeInterval = 15
+    private let monitorIntervalSeconds: TimeInterval = 45
     private let maxUnhealthyRunningChecksBeforeRestart = 3
 
     private init() {
