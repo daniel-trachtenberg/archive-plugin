@@ -75,4 +75,13 @@ class UploadWindowManager {
         guard isVisible else { return }
         window?.orderOut(nil)
     }
+
+    func presentOpenPanel(_ panel: NSOpenPanel, completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        if let window, window.isVisible {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+            return
+        }
+
+        panel.begin(completionHandler: completion)
+    }
 }

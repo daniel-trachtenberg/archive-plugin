@@ -269,7 +269,7 @@ struct UploadView: View {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
 
-        panel.begin { result in
+        UploadWindowManager.shared.presentOpenPanel(panel) { result in
             if result == .OK {
                 DispatchQueue.main.async {
                     self.selectedFiles = panel.urls
